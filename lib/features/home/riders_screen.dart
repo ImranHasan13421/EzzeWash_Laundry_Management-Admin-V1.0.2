@@ -23,13 +23,42 @@ class _RidersScreenState extends State<RidersScreen> {
   List<Map<String, dynamic>> _riders = [];
   String _searchQuery = '';
 
+  // Realtime subscription for instant updates
+  RealtimeChannel? _riderSyncChannel;
+
   // Stores "Today's Cash" calculation for each rider
   Map<String, double> _todayCashMap = {};
 
-  @override void initState() { super.initState(); _loadRidersData(); }
+  @override void initState() {
+    super.initState();
+    _loadRidersData();
+    _setupRealtime();
+  }
+
+  @override
+  void dispose() {
+    _riderSyncChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  // ─── NEW: REALTIME LISTENER FOR INSTANT ADMIN UPDATES ───
+  void _setupRealtime() {
+    _riderSyncChannel = supabase.channel('admin_rider_updates')
+        .onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: AppConstants.ridersTable,
+      callback: (payload) {
+        // Whenever cash_in_hand or assignment status changes, refresh the UI
+        _loadRidersData();
+      },
+    ).subscribe();
+  }
 
   Future<void> _loadRidersData() async {
-    setState(() => _loading = true);
+    // Only show full screen loader on first load, otherwise refresh silently
+    if (_riders.isEmpty) setState(() => _loading = true);
+
     try {
       // 1. Fetch all riders
       final data = await supabase.from(AppConstants.ridersTable).select().order('created_at', ascending: false);
@@ -205,6 +234,7 @@ class _CollectCashDialog extends StatefulWidget {
   const _CollectCashDialog({required this.riderId, required this.riderName, required this.todayCash, required this.totalCash, required this.onSuccess});
   @override State<_CollectCashDialog> createState() => _CollectCashDialogState();
 }
+
 class _CollectCashDialogState extends State<_CollectCashDialog> {
   final _amtCtrl = TextEditingController();
   bool _loading = false;
@@ -216,15 +246,12 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
     _amtCtrl.text = widget.totalCash.toStringAsFixed(0);
   }
 
-  // ─── NEW: ONESIGNAL PUSH NOTIFICATION LOGIC ───
-  // ─── UPDATED: ONESIGNAL PUSH NOTIFICATION LOGIC ───
   Future<void> _sendNotificationToRider(String targetRiderId, double amount) async {
-    // ⚠️ Replace these with your actual keys!
-    const String oneSignalAppId = 'ccdfa117-940d-41fc-8a59-f2043aa3cee8';
-    const String oneSignalRestApiKey = 'os_v2_app_ztp2cf4ubva7zcsz6icdvi6o5asewcb76ebu635iy7dfowxboz2d2635ryw4olzn6ha3ujufruufldiuprvkqxydjo56jcoh5bs7yma';
+    const String oneSignalAppId = '98573413-e76f-4636-9442-40cce7f1e70e';
+    const String oneSignalRestApiKey = 'os_v2_app_tbltie7hn5ddnfccidgop4phbzzojxruownutrentkfjvytww7j4k4aesmwnhxkgypagmwxwtevei4rrce4liafttov52perm4xbkgi';
 
     try {
-      await http.post(
+      final response = await http.post(
         Uri.parse('https://onesignal.com/api/v1/notifications'),
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -233,18 +260,18 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
         body: jsonEncode({
           'app_id': oneSignalAppId,
           'target_channel': 'push',
-          // Matching your Deno Edge Function exactly!
           'include_aliases': {
             'external_id': [targetRiderId]
           },
-          'headings': {'en': '💵 Cash Collected!'},
-          // Matching the exact text you requested
+          'headings': {'en': 'Cash Collected! 💵'},
           'contents': {'en': 'Submitted In Hand Cash: ৳${amount.toStringAsFixed(0)} Successfully'},
         }),
       );
-      debugPrint('Notification sent successfully to Rider: $targetRiderId');
+
+      final res = jsonDecode(response.body);
+      if (res.containsKey('errors')) debugPrint('OneSignal Error: ${res['errors']}');
     } catch (e) {
-      debugPrint('Error sending push notification: $e');
+      debugPrint('Error: $e');
     }
   }
 
@@ -255,19 +282,18 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
 
     setState(() { _loading = true; _error = null; });
     try {
-      // 1. Log transaction & deduct from database
+      // 🚀 FIXED RPC: Uses correct parameter 'p_amount' for Numeric function
       await supabase.rpc('collect_rider_cash', params: {
         'p_rider_id': widget.riderId,
         'p_amount': amt,
       });
 
-      // 2. SEND INSTANT PUSH NOTIFICATION
       await _sendNotificationToRider(widget.riderId, amt);
 
       widget.onSuccess();
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      setState(() { _loading = false; _error = 'Database Error: $e'; });
+      setState(() { _loading = false; _error = e.toString(); });
     }
   }
 
@@ -290,7 +316,7 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
         const SizedBox(height: 24),
         Text('Amount to Collect (৳)', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)), const SizedBox(height: 8),
         TextField(controller: _amtCtrl, keyboardType: TextInputType.number, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold), decoration: InputDecoration(prefixIcon: const Icon(Icons.payments_outlined, color: Colors.grey), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.green, width: 2)))),
-        if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!, style: GoogleFonts.inter(color: Colors.red, fontSize: 12))),
+        if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Text(_error!, style: GoogleFonts.inter(color: Colors.red, fontSize: 13, fontWeight: FontWeight.w600)))),
         const SizedBox(height: 32),
         SizedBox(width: double.infinity, height: 56, child: ElevatedButton(onPressed: _loading ? null : _submitCash, style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _loading ? const CircularProgressIndicator(color: Colors.white) : Text('Confirm Collection', style: GoogleFonts.inter(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))),
       ]))),
