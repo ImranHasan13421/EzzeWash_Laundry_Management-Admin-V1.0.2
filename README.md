@@ -1,5 +1,5 @@
 B.Sc. in CSE Final Year Project 2025-2026
-# EzzeWash - Smart Laundry Service Platform
+# EzzeWash - Smart Laundry Service Platform (Admin Software)
 
 EzzeWash is a modern laundry service management system built using **Flutter**.  
 The platform connects **customers and administrators** through a single integrated system that simplifies laundry service operations.
