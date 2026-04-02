@@ -1,4 +1,6 @@
 // lib/features/home/riders_screen.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -204,9 +206,47 @@ class _CollectCashDialog extends StatefulWidget {
   @override State<_CollectCashDialog> createState() => _CollectCashDialogState();
 }
 class _CollectCashDialogState extends State<_CollectCashDialog> {
-  final _amtCtrl = TextEditingController(); bool _loading = false; String? _error;
+  final _amtCtrl = TextEditingController();
+  bool _loading = false;
+  String? _error;
 
-  @override void initState() { super.initState(); _amtCtrl.text = widget.totalCash.toStringAsFixed(0); }
+  @override
+  void initState() {
+    super.initState();
+    _amtCtrl.text = widget.totalCash.toStringAsFixed(0);
+  }
+
+  // ─── NEW: ONESIGNAL PUSH NOTIFICATION LOGIC ───
+  // ─── UPDATED: ONESIGNAL PUSH NOTIFICATION LOGIC ───
+  Future<void> _sendNotificationToRider(String targetRiderId, double amount) async {
+    // ⚠️ Replace these with your actual keys!
+    const String oneSignalAppId = 'ccdfa117-940d-41fc-8a59-f2043aa3cee8';
+    const String oneSignalRestApiKey = 'os_v2_app_ztp2cf4ubva7zcsz6icdvi6o5asewcb76ebu635iy7dfowxboz2d2635ryw4olzn6ha3ujufruufldiuprvkqxydjo56jcoh5bs7yma';
+
+    try {
+      await http.post(
+        Uri.parse('https://onesignal.com/api/v1/notifications'),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Authorization': 'Basic $oneSignalRestApiKey',
+        },
+        body: jsonEncode({
+          'app_id': oneSignalAppId,
+          'target_channel': 'push',
+          // Matching your Deno Edge Function exactly!
+          'include_aliases': {
+            'external_id': [targetRiderId]
+          },
+          'headings': {'en': '💵 Cash Collected!'},
+          // Matching the exact text you requested
+          'contents': {'en': 'Submitted In Hand Cash: ৳${amount.toStringAsFixed(0)} Successfully'},
+        }),
+      );
+      debugPrint('Notification sent successfully to Rider: $targetRiderId');
+    } catch (e) {
+      debugPrint('Error sending push notification: $e');
+    }
+  }
 
   Future<void> _submitCash() async {
     final amt = double.tryParse(_amtCtrl.text);
@@ -215,11 +255,15 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
 
     setState(() { _loading = true; _error = null; });
     try {
-      // Calls our brand new SQL function!
+      // 1. Log transaction & deduct from database
       await supabase.rpc('collect_rider_cash', params: {
         'p_rider_id': widget.riderId,
         'p_amount': amt,
       });
+
+      // 2. SEND INSTANT PUSH NOTIFICATION
+      await _sendNotificationToRider(widget.riderId, amt);
+
       widget.onSuccess();
       if (mounted) Navigator.pop(context);
     } catch (e) {
