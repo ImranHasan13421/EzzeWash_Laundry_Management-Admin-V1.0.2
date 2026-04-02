@@ -24,7 +24,7 @@ class AdminApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'EzeeWash Admin',
+      title: 'EzzeWash Admin',
       theme: ThemeData(
         colorScheme: const ColorScheme.light(primary: AppColors.primary),
         scaffoldBackgroundColor: AppColors.background,
