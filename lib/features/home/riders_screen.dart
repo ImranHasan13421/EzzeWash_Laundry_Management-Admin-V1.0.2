@@ -1,4 +1,5 @@
 // lib/features/home/riders_screen.dart
+import '../../core/constants/api_keys.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -250,8 +251,8 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
   }
 
   Future<void> _sendNotificationToRider(String targetRiderId, double amount) async {
-    const String oneSignalAppId = '98573413-e76f-4636-9442-40cce7f1e70e';
-    const String oneSignalRestApiKey = 'os_v2_app_tbltie7hn5ddnfccidgop4phbykr7fbpwofuxm4wmj5hglkl6bwuj7efh5lxquokyqb37jxnnbh3zb7l32iezulpufsd7y2yfki6uoi';
+    const String oneSignalAppId = ApiKeys.oneSignalAppId;
+    const String oneSignalRestApiKey = ApiKeys.oneSignalRestKey;
 
     try {
       final response = await http.post(

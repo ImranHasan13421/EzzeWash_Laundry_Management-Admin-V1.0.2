@@ -1,4 +1,3 @@
-// lib/features/home/order_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -21,7 +20,8 @@ class OrderScreenState extends State<OrderScreen> {
   String _statusFilter = 'All'; String _searchQuery = ''; String _sortOption = 'Newest First'; String _storeFilter = 'All'; String _serviceFilter = 'All';
   RealtimeChannel? _channel;
 
-  final _statuses = ['All', 'pending', 'confirmed', 'picked_up', 'in_process', 'ready', 'out_for_delivery', 'delivered', 'cancelled'];
+  // STRICT LOGIC: Exact states required for the 5-Phase Handshake flow
+  final _statuses = ['All', 'pending', 'confirmed', 'assign_pickup', 'picked_up', 'dropped', 'received', 'in_process', 'ready', 'out_for_delivery', 'delivered', 'cancelled'];
 
   @override void initState() { super.initState(); _loadInitialData(); _subscribeRealtime(); }
   @override void dispose() { _channel?.unsubscribe(); super.dispose(); }
@@ -48,7 +48,8 @@ class OrderScreenState extends State<OrderScreen> {
       final storeData = await supabase.from(AppConstants.storesTable).select('id, name');
       final serviceData = await supabase.from(AppConstants.servicesTable).select('id, title');
 
-      var query = supabase.from(AppConstants.ordersTable).select('*, profiles(full_name, phone), services(title), stores(name), riders!orders_rider_id_fkey(full_name, avatar_url)');
+      // STRICT LOGIC: Query specifically fetches both pickup and delivery rider names for Admin visibility
+      var query = supabase.from(AppConstants.ordersTable).select('*, profiles(full_name, phone), services(title), stores(name), pickup_rider:riders!pickup_rider_id(full_name, avatar_url), delivery_rider:riders!delivery_rider_id(full_name, avatar_url)');
       if (!widget.isSuperAdmin && widget.managerStoreId != null) {
         query = query.eq('store_id', widget.managerStoreId!);
       }
@@ -60,7 +61,7 @@ class OrderScreenState extends State<OrderScreen> {
 
   Future<void> _loadOrders() async {
     try {
-      var query = supabase.from(AppConstants.ordersTable).select('*, profiles(full_name, phone), services(title), stores(name), riders!orders_rider_id_fkey(full_name, avatar_url)');
+      var query = supabase.from(AppConstants.ordersTable).select('*, profiles(full_name, phone), services(title), stores(name), pickup_rider:riders!pickup_rider_id(full_name, avatar_url), delivery_rider:riders!delivery_rider_id(full_name, avatar_url)');
       if (!widget.isSuperAdmin && widget.managerStoreId != null) {
         query = query.eq('store_id', widget.managerStoreId!);
       }
@@ -72,7 +73,6 @@ class OrderScreenState extends State<OrderScreen> {
   void _applyFilter() {
     _filtered = _allOrders.where((o) {
       final matchStatus = _statusFilter == 'All' || o['status'] == _statusFilter;
-      // If they are a manager, the query is already filtered by DB, but we keep this logic intact for SuperAdmins
       final matchStore  = (!widget.isSuperAdmin) || _storeFilter == 'All' || o['store_id'].toString() == _storeFilter;
       final matchService = _serviceFilter == 'All' || o['service_id'].toString() == _serviceFilter;
       final q = _searchQuery.toLowerCase();
@@ -87,9 +87,10 @@ class OrderScreenState extends State<OrderScreen> {
     else _filtered.sort((a, b) => (a['created_at'] ?? '').compareTo(b['created_at'] ?? ''));
   }
 
-  double _getProgressForStatus(String status) { switch (status) { case 'pending': return 0.1; case 'confirmed': return 0.2; case 'picked_up': return 0.4; case 'in_process': return 0.6; case 'ready': return 0.8; case 'out_for_delivery': return 0.9; case 'delivered': return 1.0; default: return 0.0; } }
-  String? _getNextBulkStatus(String current) { if (current == 'pending') return 'confirmed'; if (current == 'picked_up') return 'in_process'; if (current == 'in_process') return 'ready'; if (current == 'out_for_delivery') return 'delivered'; return null; }
-  String _getBulkActionLabel() { if (_statusFilter == 'pending') return 'Confirm All'; if (_statusFilter == 'picked_up') return 'Process All'; if (_statusFilter == 'in_process') return 'Mark All Ready'; if (_statusFilter == 'out_for_delivery') return 'Deliver All'; return 'Mark All'; }
+  double _getProgressForStatus(String status) { switch (status) { case 'pending': return 0.1; case 'confirmed': return 0.2; case 'assign_pickup': return 0.3; case 'picked_up': return 0.4; case 'dropped': return 0.5; case 'received': return 0.6; case 'in_process': return 0.7; case 'ready': return 0.8; case 'out_for_delivery': return 0.9; case 'delivered': return 1.0; default: return 0.0; } }
+
+  String? _getNextBulkStatus(String current) { if (current == 'pending') return 'confirmed'; if (current == 'dropped') return 'received'; if (current == 'received') return 'in_process'; if (current == 'in_process') return 'ready'; return null; }
+  String _getBulkActionLabel() { if (_statusFilter == 'pending') return 'Confirm All'; if (_statusFilter == 'dropped') return 'Receive All'; if (_statusFilter == 'received') return 'Start Washing All'; if (_statusFilter == 'in_process') return 'Mark All Ready'; return 'Mark All'; }
 
   Future<void> _handleBulkAction() async {
     if (_filtered.isEmpty) return;
@@ -102,13 +103,22 @@ class OrderScreenState extends State<OrderScreen> {
 
   Future<void> _updateStatus(String orderId, String newStatus) async {
     setState(() => _loading = true);
-    try { await supabase.from(AppConstants.ordersTable).update({'status': newStatus, 'progress': _getProgressForStatus(newStatus)}).eq('id', orderId); await _loadOrders(); }
+    try { await supabase.from(AppConstants.ordersTable).update({'status': newStatus, 'progress': _getProgressForStatus(newStatus), 'updated_at': DateTime.now().toIso8601String()}).eq('id', orderId); await _loadOrders(); }
     catch (e) { if (mounted) { setState(() => _loading = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error)); } }
   }
 
   Future<void> _assignRiderAndStatus(String orderId, String riderId, String nextStatus) async {
     setState(() => _loading = true);
-    try { await supabase.rpc('rider_update_order_status', params: {'p_order_id': orderId, 'p_rider_id': riderId, 'p_status': nextStatus, 'p_progress': _getProgressForStatus(nextStatus)}); await _loadOrders(); }
+    try {
+      final riderField = nextStatus == 'assign_pickup' ? 'pickup_rider_id' : 'delivery_rider_id';
+      await supabase.from(AppConstants.ordersTable).update({
+        'status': nextStatus,
+        riderField: riderId,
+        'progress': _getProgressForStatus(nextStatus),
+        'updated_at': DateTime.now().toIso8601String()
+      }).eq('id', orderId);
+      await _loadOrders();
+    }
     catch (e) { if (mounted) setState(() => _loading = false); }
   }
 
@@ -116,16 +126,20 @@ class OrderScreenState extends State<OrderScreen> {
     final res = await supabase.from(AppConstants.ridersTable).select().eq('is_active', true);
     final availableRiders = List<Map<String, dynamic>>.from(res);
     if (!mounted) return;
-    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)), title: Text(nextStatus == 'picked_up' ? 'Dispatch for Pickup' : 'Dispatch for Delivery', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 20)), content: SizedBox(width: 440, child: availableRiders.isEmpty ? Padding(padding: const EdgeInsets.all(24), child: Text("No active riders available.", style: GoogleFonts.inter())) : ListView.separated(shrinkWrap: true, itemCount: availableRiders.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (c, i) {
+    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)), title: Text(nextStatus == 'assign_pickup' ? 'Dispatch for Pickup' : 'Dispatch for Delivery', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 20)), content: SizedBox(width: 440, child: availableRiders.isEmpty ? Padding(padding: const EdgeInsets.all(24), child: Text("No active riders available.", style: GoogleFonts.inter())) : ListView.separated(shrinkWrap: true, itemCount: availableRiders.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (c, i) {
       final r = availableRiders[i]; final isOnline = r['is_online'] == true; final avatar = r['avatar_url'] as String?;
       return ListTile(contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8), leading: CircleAvatar(backgroundColor: AppColors.primary.withOpacity(0.1), backgroundImage: (avatar != null && avatar.isNotEmpty) ? NetworkImage(avatar) : null, child: (avatar == null || avatar.isEmpty) ? Text(r['full_name'][0].toUpperCase(), style: GoogleFonts.outfit(color: AppColors.primary, fontWeight: FontWeight.bold)) : null), title: Text(r['full_name'], style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15)), subtitle: Text('${r['vehicle_type']} • ${r['vehicle_plate']}', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext)), trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(isOnline ? 'Online' : 'Offline', style: GoogleFonts.inter(fontSize: 11, color: isOnline ? AppColors.success : Colors.grey.shade600, fontWeight: FontWeight.bold))), onTap: () { Navigator.pop(ctx); _assignRiderAndStatus(orderId, r['id'], nextStatus); });
     })), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: GoogleFonts.inter(color: AppColors.subtext, fontWeight: FontWeight.w600)))]));
   }
 
+  // STRICT LOGIC: Execute exact Handshake steps
   Future<void> _handleActionClick(String orderId, String currentStatus) async {
-    if (currentStatus == 'pending') { setState(() => _loading = true); try { await supabase.from(AppConstants.ordersTable).update({'status': 'confirmed', 'progress': 0.2}).eq('id', orderId); await _loadOrders(); if (mounted) _showRiderSelection(orderId, 'picked_up'); } catch (e) { if (mounted) setState(() => _loading = false); } }
-    else if (currentStatus == 'confirmed' || currentStatus == 'ready') { _showRiderSelection(orderId, currentStatus == 'confirmed' ? 'picked_up' : 'out_for_delivery'); }
-    else if (currentStatus == 'picked_up') { _updateStatus(orderId, 'in_process'); } else if (currentStatus == 'in_process') { _updateStatus(orderId, 'ready'); } else if (currentStatus == 'out_for_delivery') { _updateStatus(orderId, 'delivered'); }
+    if (currentStatus == 'pending') { _updateStatus(orderId, 'confirmed'); }
+    else if (currentStatus == 'confirmed') { _showRiderSelection(orderId, 'assign_pickup'); }
+    else if (currentStatus == 'dropped') { _updateStatus(orderId, 'received'); }
+    else if (currentStatus == 'received') { _updateStatus(orderId, 'in_process'); }
+    else if (currentStatus == 'in_process') { _updateStatus(orderId, 'ready'); }
+    else if (currentStatus == 'ready') { _showRiderSelection(orderId, 'out_for_delivery'); }
   }
 
   @override Widget build(BuildContext context) {
@@ -148,7 +162,6 @@ class OrderScreenState extends State<OrderScreen> {
               Expanded(child: TextField(onChanged: (v) => setState(() { _searchQuery = v; _applyFilter(); }), style: GoogleFonts.inter(fontSize: 15), decoration: InputDecoration(hintText: 'Search by order #, customer, service…', hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14), prefixIcon: Icon(Icons.search, color: Colors.grey.shade500, size: 22), filled: true, fillColor: AppColors.surface, contentPadding: const EdgeInsets.symmetric(vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppColors.primary))))),
               const SizedBox(width: 16),
 
-              // Only Super Admin can filter by store. Manager is locked to their store.
               if (widget.isSuperAdmin) ...[
                 Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border)), child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _storeFilter, items: [const DropdownMenuItem(value: 'All', child: Text('All Stores', style: TextStyle(fontSize: 14))), ..._storeOptions.map((s) => DropdownMenuItem(value: s['id'].toString(), child: Text(s['name'], style: const TextStyle(fontSize: 14))))], onChanged: (v) => setState(() { _storeFilter = v!; _applyFilter(); })))),
                 const SizedBox(width: 16),
@@ -180,12 +193,30 @@ class _OrderCard extends StatelessWidget {
   final Map<String, dynamic> order; final VoidCallback onActionClick; final VoidCallback onCancelClick;
   const _OrderCard({required this.order, required this.onActionClick, required this.onCancelClick});
 
-  Color _statusColor(String s) { switch (s) { case 'pending': return AppColors.warning; case 'confirmed': return Colors.teal; case 'picked_up': return const Color(0xFF8B5CF6); case 'in_process': return Colors.blue; case 'ready': return Colors.orange; case 'out_for_delivery': return AppColors.primary; case 'delivered': return AppColors.success; case 'cancelled': return AppColors.error; default: return AppColors.subtext; } }
-  String _actionLabel(String s) { switch (s) { case 'pending': return 'Accept & Dispatch'; case 'confirmed': return 'Assign Rider'; case 'picked_up': return 'Start Washing'; case 'in_process': return 'Mark Ready'; case 'ready': return 'Dispatch Delivery'; case 'out_for_delivery': return 'Mark Delivered'; default: return ''; } }
+  Color _statusColor(String s) { switch (s) { case 'pending': return AppColors.warning; case 'confirmed': return Colors.teal; case 'assign_pickup': return Colors.indigo; case 'picked_up': return const Color(0xFF8B5CF6); case 'dropped': return Colors.orange; case 'received': return Colors.deepOrange; case 'in_process': return Colors.blue; case 'ready': return Colors.greenAccent.shade700; case 'out_for_delivery': return AppColors.primary; case 'delivered': return AppColors.success; case 'cancelled': return AppColors.error; default: return AppColors.subtext; } }
+
+  // STRICT LOGIC: Handshake button labels
+  String _actionLabel(String s) { switch (s) { case 'pending': return 'Confirm Order'; case 'confirmed': return 'Assign Rider & PickUp'; case 'dropped': return 'RECEIVED'; case 'received': return 'Start Washing'; case 'in_process': return 'Mark Ready'; case 'ready': return 'Dispatch Delivery'; default: return ''; } }
+
+  Color _btnColor(String s) { if (s == 'pending' || s == 'confirmed' || s == 'ready') return AppColors.primary; if (s == 'dropped') return Colors.orange; if (s == 'received' || s == 'in_process') return Colors.blue; return AppColors.success; }
 
   @override Widget build(BuildContext context) {
     final isManual = order['is_manual'] == true; final manualName = order['manual_customer_name'] as String?; final profileName = (order['profiles'] as Map?)?['full_name'] as String?; final String displayName = isManual ? (manualName ?? 'Manual Customer') : (profileName ?? 'Guest Customer');
-    final rider = order['riders'] as Map?; final status = order['status'] as String? ?? 'pending'; final actionLbl = _actionLabel(status);
+    final status = order['status'] as String? ?? 'pending'; final actionLbl = _actionLabel(status);
+
+    // STRICT LOGIC: Determines which rider to display based on the current process phase
+    final pickupRider = order['pickup_rider'] as Map?;
+    final deliveryRider = order['delivery_rider'] as Map?;
+    Map? activeRider;
+    String riderRole = '';
+
+    if (['assign_pickup', 'picked_up', 'dropped'].contains(status)) {
+      activeRider = pickupRider;
+      riderRole = 'Pickup Rider';
+    } else if (['out_for_delivery', 'delivered'].contains(status)) {
+      activeRider = deliveryRider;
+      riderRole = 'Delivery Rider';
+    }
 
     return Container(
       padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))]),
@@ -196,14 +227,14 @@ class _OrderCard extends StatelessWidget {
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [Text('#${order['order_number']}', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.text)), const SizedBox(width: 12), _badge(status, _statusColor(status)), if (isManual) ...[const SizedBox(width: 8), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppColors.border)), child: Row(children: [Icon(Icons.edit_note, size: 12, color: Colors.blueGrey.shade700), const SizedBox(width: 4), Text('ADMIN ADDED', style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.blueGrey.shade700))]))] ]),
             const SizedBox(height: 4), Text(displayName, style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text)),
-            if (rider != null) Padding(padding: const EdgeInsets.only(top: 4), child: Row(children: [const Icon(Icons.delivery_dining, size: 16, color: AppColors.success), const SizedBox(width: 6), Text('Rider: ${rider['full_name']}', style: GoogleFonts.inter(fontSize: 12, color: AppColors.success, fontWeight: FontWeight.w600))]))
+            if (activeRider != null) Padding(padding: const EdgeInsets.only(top: 4), child: Row(children: [const Icon(Icons.delivery_dining, size: 16, color: AppColors.success), const SizedBox(width: 6), Text('$riderRole: ${activeRider['full_name']}', style: GoogleFonts.inter(fontSize: 12, color: AppColors.success, fontWeight: FontWeight.w600))]))
           ])),
           Text('৳${((order['total_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 24, color: AppColors.primary)),
         ]),
         if (actionLbl.isNotEmpty) ...[
           const SizedBox(height: 20), const Divider(height: 1), const SizedBox(height: 16),
           Row(children: [
-            _btn(actionLbl, (status == 'pending' || status == 'confirmed' || status == 'ready') ? AppColors.primary : AppColors.success, onActionClick, (status == 'pending' || status == 'confirmed' || status == 'ready' || status == 'in_process')),
+            _btn(actionLbl, _btnColor(status), onActionClick, true),
             const SizedBox(width: 12),
             if (status == 'pending') _btn('Cancel', AppColors.error, onCancelClick, false),
           ]),
@@ -235,7 +266,6 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
       final str = await supabase.from(AppConstants.storesTable).select('id, name');
       _stores = List<Map<String, dynamic>>.from(str);
     } else {
-      // If manager, hardcode their store ID to the backend and skip dropdown
       _selectedStoreId = widget.managerStoreId;
     }
 
@@ -270,7 +300,6 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Service'), DropdownButtonFormField<String>(value: _selectedServiceId, items: _services.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['title'] as String, style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedServiceId = v), decoration: _deco(''))])),
             const SizedBox(width: 16),
 
-            // Only show Store Dropdown if Super Admin. Manager uses default logic silently.
             if (widget.isSuperAdmin)
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Store *'), DropdownButtonFormField<String>(value: _selectedStoreId, hint: Text('Select Store', style: GoogleFonts.inter(fontSize: 14)), items: _stores.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['name'] as String, style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedStoreId = v), decoration: _deco(''), validator: (value) => value == null ? 'Required' : null)])),
           ]), const SizedBox(height: 20),
