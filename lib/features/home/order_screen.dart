@@ -102,7 +102,6 @@ class OrderScreenState extends State<OrderScreen> {
     catch (e) { if (mounted) { setState(() => _loading = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error)); } }
   }
 
-  // --- FIXED: Now explicitly sets rider ID in database ---
   Future<void> _assignRiderAndStatus(String orderId, String riderId, String nextStatus) async {
     setState(() => _loading = true);
     try {
@@ -128,7 +127,6 @@ class OrderScreenState extends State<OrderScreen> {
     })), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: GoogleFonts.inter(color: AppColors.subtext, fontWeight: FontWeight.w600)))]));
   }
 
-  // --- DYNAMIC KANBAN LOGIC ---
   Future<void> _handleActionClick(Map<String, dynamic> order) async {
     final orderId = order['id'];
     final currentStatus = order['status'] ?? 'pending';
@@ -139,7 +137,7 @@ class OrderScreenState extends State<OrderScreen> {
     }
     else if (currentStatus == 'confirmed') {
       if (logisticsMode == 'self_service' || logisticsMode == 'delivery_only') {
-        _updateStatus(orderId, 'received'); // Skip pickup, already in shop
+        _updateStatus(orderId, 'received');
       } else {
         _showRiderSelection(orderId, 'assign_pickup');
       }
@@ -149,14 +147,13 @@ class OrderScreenState extends State<OrderScreen> {
     else if (currentStatus == 'in_process') { _updateStatus(orderId, 'ready'); }
     else if (currentStatus == 'ready') {
       if (logisticsMode == 'self_service') {
-        _updateStatus(orderId, 'delivered'); // Handed to customer
+        _updateStatus(orderId, 'delivered');
       } else {
         _showRiderSelection(orderId, 'out_for_delivery');
       }
     }
   }
 
-  // --- DESKTOP OPTIMIZED SPLIT VIEW FOR DELIVERED TAB ---
   Widget _buildDeliveredSplitView() {
     final homeDeliveries = _filtered.where((o) => o['logistics_mode'] != 'self_service').toList();
     final inStorePickups = _filtered.where((o) => o['logistics_mode'] == 'self_service').toList();
@@ -246,10 +243,8 @@ class OrderScreenState extends State<OrderScreen> {
 
   void _showAddDialog(Map<String, dynamic>? order) => showDialog(context: context, builder: (_) => _AddOrderDialog(existingOrder: order, onAdded: _loadInitialData, isSuperAdmin: widget.isSuperAdmin, managerStoreId: widget.managerStoreId, onPrint: _generateAndPrintReceipt));
 
-  // --- PDF RECEIPT GENERATOR ---
   Future<void> _generateAndPrintReceipt(Map<String, dynamic> order) async {
     final pdf = pw.Document();
-
     final isManual = order['is_manual'] == true;
     final customerName = isManual ? order['manual_customer_name'] : order['profiles']?['full_name'] ?? 'Guest';
     final customerPhone = isManual ? order['manual_customer_phone'] : order['profiles']?['phone'] ?? 'N/A';
@@ -260,7 +255,7 @@ class OrderScreenState extends State<OrderScreen> {
 
     pdf.addPage(
       pw.Page(
-        pageFormat: PdfPageFormat.roll80, // POS Printer style
+        pageFormat: PdfPageFormat.roll80,
         margin: const pw.EdgeInsets.all(16),
         build: (pw.Context context) {
           return pw.Column(
@@ -310,7 +305,6 @@ class _OrderCard extends StatelessWidget {
 
   Color _statusColor(String s) { switch (s) { case 'pending': return AppColors.warning; case 'confirmed': return Colors.teal; case 'assign_pickup': return Colors.indigo; case 'picked_up': return const Color(0xFF8B5CF6); case 'dropped': return Colors.orange; case 'received': return Colors.deepOrange; case 'in_process': return Colors.blue; case 'ready': return Colors.greenAccent.shade700; case 'out_for_delivery': return AppColors.primary; case 'delivered': return AppColors.success; case 'cancelled': return AppColors.error; default: return AppColors.subtext; } }
 
-  // --- DYNAMIC BUTTON LABELS ---
   String _actionLabel(String s, String? mode) {
     if (s == 'pending') return 'Confirm Order';
     if (s == 'confirmed') return (mode == 'self_service' || mode == 'delivery_only') ? 'Mark as Received' : 'Assign Pickup Rider';
@@ -395,10 +389,17 @@ class _AddOrderDialog extends StatefulWidget {
   const _AddOrderDialog({this.existingOrder, required this.onAdded, required this.isSuperAdmin, this.managerStoreId, required this.onPrint});
   @override State<_AddOrderDialog> createState() => _AddOrderDialogState();
 }
+
 class _AddOrderDialogState extends State<_AddOrderDialog> {
-  final _formKey = GlobalKey<FormState>(); final _nameCtrl = TextEditingController(); final _phoneCtrl = TextEditingController();
-  final _pickupAddrCtrl = TextEditingController(); final _deliveryAddrCtrl = TextEditingController();
-  final _qtyCtrl = TextEditingController(text: '1'); final _priceCtrl = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  // Use explicit controllers initialized in initState to prevent Desktop Windows Backspace bug
+  late TextEditingController _nameCtrl;
+  late TextEditingController _phoneCtrl;
+  late TextEditingController _pickupAddrCtrl;
+  late TextEditingController _deliveryAddrCtrl;
+  late TextEditingController _qtyCtrl;
+  late TextEditingController _priceCtrl;
 
   bool _loading = false; bool _sameAsPickup = false;
   List<Map<String, dynamic>> _services = []; List<Map<String, dynamic>> _stores = [];
@@ -407,24 +408,34 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
 
   @override void initState() {
     super.initState();
-    _loadOptions().then((_) {
-      if (widget.existingOrder != null) _prefillData(widget.existingOrder!);
-    });
+    final o = widget.existingOrder;
+
+    // Completely synchronous instantiation prevents cursor state corruption
+    _nameCtrl = TextEditingController(text: o?['manual_customer_name']?.toString() ?? '');
+    _phoneCtrl = TextEditingController(text: o?['manual_customer_phone']?.toString() ?? '');
+    _pickupAddrCtrl = TextEditingController(text: o?['pickup_address']?.toString() ?? '');
+    _deliveryAddrCtrl = TextEditingController(text: o?['delivery_address']?.toString() ?? '');
+    _qtyCtrl = TextEditingController(text: (o?['item_count'] ?? 1).toString());
+    _priceCtrl = TextEditingController(text: ((o?['total_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(0));
+
+    if (o != null) {
+      _logisticsMode = o['logistics_mode'] ?? 'full_service';
+      if (o['pickup_date'] != null) _pickupDate = DateTime.parse(o['pickup_date']);
+      if (o['delivery_date'] != null) _deliveryDate = DateTime.parse(o['delivery_date']);
+    }
+
+    _loadOptions();
   }
 
-  void _prefillData(Map<String, dynamic> o) {
-    _nameCtrl.text = o['manual_customer_name'] ?? '';
-    _phoneCtrl.text = o['manual_customer_phone'] ?? '';
-    _pickupAddrCtrl.text = o['pickup_address'] ?? '';
-    _deliveryAddrCtrl.text = o['delivery_address'] ?? '';
-    _qtyCtrl.text = (o['item_count'] ?? 1).toString();
-    _priceCtrl.text = ((o['total_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(0);
-    _logisticsMode = o['logistics_mode'] ?? 'full_service';
-    if (o['service_id'] != null) _selectedServiceId = o['service_id'];
-    if (o['store_id'] != null) _selectedStoreId = o['store_id'];
-    if (o['pickup_date'] != null) _pickupDate = DateTime.parse(o['pickup_date']);
-    if (o['delivery_date'] != null) _deliveryDate = DateTime.parse(o['delivery_date']);
-    setState((){});
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _pickupAddrCtrl.dispose();
+    _deliveryAddrCtrl.dispose();
+    _qtyCtrl.dispose();
+    _priceCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadOptions() async {
@@ -435,20 +446,41 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
     } else {
       _selectedStoreId = widget.managerStoreId;
     }
+
     if (mounted) setState(() {
       _services = List<Map<String, dynamic>>.from(svc);
-      if (_services.isNotEmpty && widget.existingOrder == null) _selectedServiceId = _services.first['id'];
+
+      if (widget.existingOrder != null) {
+        final o = widget.existingOrder!;
+        if (o['service_id'] != null && _services.any((s) => s['id'] == o['service_id'])) {
+          _selectedServiceId = o['service_id'];
+        }
+        if (o['store_id'] != null && _stores.any((s) => s['id'] == o['store_id'])) {
+          _selectedStoreId = o['store_id'];
+        }
+      } else if (_services.isNotEmpty) {
+        _selectedServiceId = _services.first['id'];
+      }
     });
-    _calculatePrice();
+
+    if (widget.existingOrder == null) {
+      _calculatePrice();
+    }
   }
 
   void _calculatePrice() {
     if (_selectedServiceId == null) return;
-    final svc = _services.firstWhere((s) => s['id'] == _selectedServiceId, orElse: () => {});
+    final svc = _services.firstWhere((s) => s['id'] == _selectedServiceId, orElse: () => <String, dynamic>{});
     if (svc.isEmpty) return;
+
     final basePrice = (svc['price'] as num?)?.toDouble() ?? 0;
     final qty = int.tryParse(_qtyCtrl.text) ?? 1;
-    _priceCtrl.text = (basePrice * qty).toStringAsFixed(0);
+    final calculatedStr = (basePrice * qty).toStringAsFixed(0);
+
+    // Only update if value actually changed. Prevents forceful cursor reset on rebuild.
+    if (_priceCtrl.text != calculatedStr) {
+      _priceCtrl.text = calculatedStr;
+    }
   }
 
   Future<void> _submit() async {
@@ -479,15 +511,13 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
 
       widget.onAdded();
       if (mounted) Navigator.pop(context);
-
-      // Trigger Receipt
       widget.onPrint(finalOrder);
 
     } catch (e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error)); }
     setState(() => _loading = false);
   }
 
-  InputDecoration _deco(String hint) => InputDecoration(hintText: hint, hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.primary, width: 1.5)), errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.error)));
+  InputDecoration _deco(String hint) => InputDecoration(hintText: hint, hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)), errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.error)));
   Widget _label(String text) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(text, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)));
 
   @override Widget build(BuildContext context) {
@@ -543,9 +573,9 @@ class _AddOrderDialogState extends State<_AddOrderDialog> {
           Row(children: [
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Price (৳) *'), TextFormField(controller: _priceCtrl, keyboardType: TextInputType.number, decoration: _deco('0'), validator: (v) => double.tryParse(v ?? '') == null ? 'Invalid' : null)])),
             const SizedBox(width: 16),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Pickup Date'), InkWell(onTap: () async { final d = await showDatePicker(context: context, initialDate: _pickupDate, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365))); if (d != null) setState(() { _pickupDate = d; _deliveryDate = d.add(const Duration(days: 1)); }); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${_pickupDate.day}/${_pickupDate.month}/${_pickupDate.year}', style: GoogleFonts.inter(fontSize: 14)), Icon(Icons.calendar_today_rounded, color: AppColors.primary, size: 20)])))])),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Pickup Date'), InkWell(onTap: () async { final d = await showDatePicker(context: context, initialDate: _pickupDate, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365))); if (d != null) setState(() { _pickupDate = d; _deliveryDate = d.add(const Duration(days: 1)); }); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${_pickupDate.day}/${_pickupDate.month}/${_pickupDate.year}', style: GoogleFonts.inter(fontSize: 14)), const Icon(Icons.calendar_today_rounded, color: AppColors.primary, size: 20)])))])),
             const SizedBox(width: 16),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Delivery Date'), InkWell(onTap: () async { final d = await showDatePicker(context: context, initialDate: _deliveryDate, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365))); if (d != null) setState(() => _deliveryDate = d); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${_deliveryDate.day}/${_deliveryDate.month}/${_deliveryDate.year}', style: GoogleFonts.inter(fontSize: 14)), Icon(Icons.calendar_today_rounded, color: AppColors.primary, size: 20)])))]))
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Delivery Date'), InkWell(onTap: () async { final d = await showDatePicker(context: context, initialDate: _deliveryDate, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365))); if (d != null) setState(() => _deliveryDate = d); }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${_deliveryDate.day}/${_deliveryDate.month}/${_deliveryDate.year}', style: GoogleFonts.inter(fontSize: 14)), const Icon(Icons.calendar_today_rounded, color: AppColors.primary, size: 20)])))]))
           ]),
         ]))),
         const SizedBox(height: 24), const Divider(height: 1), const SizedBox(height: 24),
