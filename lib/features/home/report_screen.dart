@@ -484,7 +484,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
 
             if (_filteredByService.isNotEmpty) ...[
-              const SizedBox(height: 40),
+              const SizedBox(height: 30),
               LayoutBuilder(
                   builder: (context, constraints) {
                     final isDesktop = constraints.maxWidth > 900;

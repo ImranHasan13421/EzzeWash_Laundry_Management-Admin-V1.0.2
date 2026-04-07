@@ -24,10 +24,7 @@ class _RidersScreenState extends State<RidersScreen> {
   List<Map<String, dynamic>> _riders = [];
   String _searchQuery = '';
 
-  // Realtime subscription for instant updates
   RealtimeChannel? _riderSyncChannel;
-
-  // Stores "Today's Cash" calculation for each rider
   Map<String, double> _todayCashMap = {};
 
   @override void initState() {
@@ -42,17 +39,13 @@ class _RidersScreenState extends State<RidersScreen> {
     super.dispose();
   }
 
-  // ─── NEW: REALTIME LISTENER FOR INSTANT ADMIN UPDATES ───
   void _setupRealtime() {
     _riderSyncChannel = supabase.channel('admin_rider_updates')
         .onPostgresChanges(
       event: PostgresChangeEvent.all,
       schema: 'public',
       table: AppConstants.ridersTable,
-      callback: (payload) {
-        // Whenever cash_in_hand or assignment status changes, refresh the UI
-        _loadRidersData();
-      },
+      callback: (payload) { _loadRidersData(); },
     ).subscribe();
   }
 
@@ -60,22 +53,16 @@ class _RidersScreenState extends State<RidersScreen> {
     if (_riders.isEmpty) setState(() => _loading = true);
 
     try {
-      // 1. Fetch all riders (This automatically brings the accurate 'Total Due' from the database)
       final data = await supabase.from(AppConstants.ridersTable).select().order('created_at', ascending: false);
-
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
 
-      // 2. Fetch today's delivered orders (Daily Performance Metric)
       final ordersData = await supabase.from(AppConstants.ordersTable)
           .select('delivery_rider_id, rider_id, total_price')
           .eq('status', 'delivered')
           .gte('updated_at', todayStart);
 
       Map<String, double> cashMap = {};
-
-      // 3. Add up today's earnings. We DO NOT subtract collections here.
-      // This ensures "Today's Cash" stays exactly at what they earned today.
       for(var o in ordersData) {
         String rId = o['delivery_rider_id']?.toString() ?? o['rider_id']?.toString() ?? '';
         if (rId.isNotEmpty) {
@@ -85,25 +72,21 @@ class _RidersScreenState extends State<RidersScreen> {
 
       if (mounted) setState(() {
         _riders = List<Map<String, dynamic>>.from(data);
-        _todayCashMap = cashMap; // Locks in the daily cash handled
+        _todayCashMap = cashMap;
         _loading = false;
       });
     }
     catch (e) { if (mounted) setState(() { _loading = false; _error = e.toString(); }); }
   }
 
-  Future<void> _toggleActive(String riderId, bool current) async {final newActiveStatus = !current;
+  Future<void> _toggleActive(String riderId, bool current) async {
+    final newActiveStatus = !current;
+    final updateData = <String, dynamic>{'is_active': newActiveStatus};
+    if (newActiveStatus == false) { updateData['is_online'] = false; }
 
-  // Create payload
-  final updateData = <String, dynamic>{'is_active': newActiveStatus};
-
-  // CRITICAL: If marking inactive, force offline simultaneously
-  if (newActiveStatus == false) {
-    updateData['is_online'] = false;
+    await supabase.from(AppConstants.ridersTable).update(updateData).eq('id', riderId);
+    _loadRidersData();
   }
-
-  await supabase.from(AppConstants.ridersTable).update(updateData).eq('id', riderId);
-  _loadRidersData();}
 
   List<Map<String, dynamic>> get _filtered {
     final q = _searchQuery.toLowerCase(); if (q.isEmpty) return _riders;
@@ -113,13 +96,15 @@ class _RidersScreenState extends State<RidersScreen> {
   void _showRiderForm([Map<String, dynamic>? rider]) => showDialog(context: context, builder: (_) => _RiderFormDialog(onSaved: _loadRidersData, rider: rider));
 
   void _showCollectCashDialog(String riderId, String riderName, double todayCash, double totalCash) {
-    showDialog(context: context, builder: (_) => _CollectCashDialog(
-        riderId: riderId,
-        riderName: riderName,
-        todayCash: todayCash,
-        totalCash: totalCash,
-        onSuccess: _loadRidersData
-    ));
+    showDialog(context: context, builder: (_) => _CollectCashDialog(riderId: riderId, riderName: riderName, todayCash: todayCash, totalCash: totalCash, onSuccess: _loadRidersData));
+  }
+
+  void _showOrderHistoryDialog(String riderId, String riderName) {
+    showDialog(context: context, builder: (_) => _RiderOrderHistoryDialog(riderId: riderId, riderName: riderName));
+  }
+
+  void _showCashHistoryDialog(String riderId, String riderName) {
+    showDialog(context: context, builder: (_) => _RiderCashHistoryDialog(riderId: riderId, riderName: riderName));
   }
 
   @override Widget build(BuildContext context) {
@@ -127,17 +112,15 @@ class _RidersScreenState extends State<RidersScreen> {
 
     return Column(children: [
       Container(
-        height: 72, padding: const EdgeInsets.symmetric(horizontal: 32), decoration:  BoxDecoration(color: AppColors.surface, border: Border(bottom: BorderSide(color: AppColors.border))),
+        height: 72, padding: const EdgeInsets.symmetric(horizontal: 32), decoration: BoxDecoration(color: AppColors.surface, border: Border(bottom: BorderSide(color: AppColors.border))),
         child: Row(children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [Text('Riders', style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.text)), Text('${_riders.length} total  •  $online online  •  $active active', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext))]),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [Text('Riders & Fleet', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), Text('Manage logistics and track delivery agents', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext))]),
           const Spacer(),
-
           if (widget.isSuperAdmin) ...[
             _GradientButton(label: 'Add Rider', icon: Icons.add, onPressed: () => _showRiderForm()),
             const SizedBox(width: 16),
           ],
-
-          Container(decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10)), child: IconButton(icon:  Icon(Icons.refresh_rounded, color: AppColors.text), onPressed: _loadRidersData)),
+          Container(decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border.withOpacity(0.5))), child: IconButton(icon: Icon(Icons.refresh_rounded, color: AppColors.text, size: 20), onPressed: _loadRidersData)),
         ]),
       ),
       Expanded(
@@ -145,24 +128,31 @@ class _RidersScreenState extends State<RidersScreen> {
           padding: const EdgeInsets.all(32),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              _RiderStat('Total Riders', _riders.length.toString(), AppColors.primary, Icons.people_outlined), const SizedBox(width: 16),
-              _RiderStat('Online Now', online.toString(), AppColors.success, Icons.wifi_outlined), const SizedBox(width: 16),
-              _RiderStat('Active Accounts', active.toString(), AppColors.info, Icons.check_circle_outline), const SizedBox(width: 16),
-              _RiderStat('Offline', (active - online).toString(), AppColors.subtext, Icons.wifi_off_outlined),
+              _RiderStat('Total Riders', _riders.length.toString(), AppColors.primary, Icons.people_outline_rounded), const SizedBox(width: 16),
+              _RiderStat('Online Now', online.toString(), AppColors.success, Icons.wifi_rounded), const SizedBox(width: 16),
+              _RiderStat('Active Accounts', active.toString(), AppColors.info, Icons.check_circle_outline_rounded), const SizedBox(width: 16),
+              _RiderStat('Offline', (active - online).toString(), AppColors.subtext, Icons.wifi_off_rounded),
             ]),
             const SizedBox(height: 24),
-            TextField(onChanged: (v) => setState(() => _searchQuery = v), style: GoogleFonts.inter(fontSize: 15), decoration: InputDecoration(hintText: 'Search by name, phone, plate…', hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14), prefixIcon: Icon(Icons.search, color: Colors.grey.shade500, size: 22), filled: true, fillColor: AppColors.surface, contentPadding: const EdgeInsets.symmetric(vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide:  BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: AppColors.primary)))),
+            TextField(onChanged: (v) => setState(() => _searchQuery = v), style: GoogleFonts.inter(fontSize: 14), decoration: InputDecoration(hintText: 'Search by name, phone, or vehicle plate...', hintStyle: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14), prefixIcon: Icon(Icons.search_rounded, color: AppColors.subtext, size: 20), filled: true, fillColor: AppColors.surface, contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)))),
             const SizedBox(height: 24),
-            Expanded(child: _loading ? const Center(child: CircularProgressIndicator(color: AppColors.primary)) : _filtered.isEmpty ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.delivery_dining, size: 64, color: AppColors.border), const SizedBox(height: 16), Text('No riders found', style: GoogleFonts.inter(color: AppColors.subtext, fontSize: 16))])) : ListView.separated(physics: const BouncingScrollPhysics(), itemCount: _filtered.length, separatorBuilder: (_, __) => const SizedBox(height: 16), itemBuilder: (_, i) {
+            Expanded(child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _filtered.isEmpty
+                ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.two_wheeler_rounded, size: 64, color: AppColors.border), const SizedBox(height: 16), Text('No riders found', style: GoogleFonts.inter(color: AppColors.subtext, fontSize: 15, fontWeight: FontWeight.w500))]))
+                : ListView.separated(physics: const BouncingScrollPhysics(), itemCount: _filtered.length, separatorBuilder: (_, __) => const SizedBox(height: 16), itemBuilder: (_, i) {
               final r = _filtered[i];
               final rId = r['id'] as String;
+              final rName = r['full_name'] ?? 'Rider';
               return _RiderCard(
                 rider: r,
                 isSuperAdmin: widget.isSuperAdmin,
                 todayCash: _todayCashMap[rId] ?? 0.0,
                 onToggleActive: _toggleActive,
                 onEdit: () => _showRiderForm(r),
-                onCollectCash: () => _showCollectCashDialog(rId, r['full_name'] ?? 'Rider', _todayCashMap[rId] ?? 0.0, (r['cash_in_hand'] as num?)?.toDouble() ?? 0.0),
+                onCollectCash: () => _showCollectCashDialog(rId, rName, _todayCashMap[rId] ?? 0.0, (r['cash_in_hand'] as num?)?.toDouble() ?? 0.0),
+                onOrderHistory: () => _showOrderHistoryDialog(rId, rName),
+                onCashHistory: () => _showCashHistoryDialog(rId, rName),
               );
             })),
           ]),
@@ -174,13 +164,16 @@ class _RidersScreenState extends State<RidersScreen> {
 
 class _RiderStat extends StatelessWidget {
   final String label, value; final Color color; final IconData icon; const _RiderStat(this.label, this.value, this.color, this.icon);
-  @override Widget build(BuildContext context) => Expanded(child: Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 2))]), child: Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 20)), const SizedBox(width: 16), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(value, style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), Text(label, style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500))])])));
+  @override Widget build(BuildContext context) => Expanded(child: Container(padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.015), blurRadius: 12, offset: const Offset(0, 4))]), child: Row(children: [Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 24)), const SizedBox(width: 16), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(value, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.text, height: 1)), const SizedBox(height: 4), Text(label, style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500))])])));
 }
 
 class _RiderCard extends StatelessWidget {
   final Map<String, dynamic> rider; final bool isSuperAdmin; final double todayCash;
-  final Future<void> Function(String, bool) onToggleActive; final VoidCallback onEdit; final VoidCallback onCollectCash;
-  const _RiderCard({required this.rider, required this.isSuperAdmin, required this.todayCash, required this.onToggleActive, required this.onEdit, required this.onCollectCash});
+  final Future<void> Function(String, bool) onToggleActive;
+  final VoidCallback onEdit; final VoidCallback onCollectCash;
+  final VoidCallback onOrderHistory; final VoidCallback onCashHistory;
+
+  const _RiderCard({required this.rider, required this.isSuperAdmin, required this.todayCash, required this.onToggleActive, required this.onEdit, required this.onCollectCash, required this.onOrderHistory, required this.onCashHistory});
 
   String _vehicleEmoji(String t) { switch (t) { case 'motorcycle': return '🏍️'; case 'bicycle': return '🚲'; case 'van': return '🚐'; default: return '🚗'; } }
 
@@ -189,61 +182,286 @@ class _RiderCard extends StatelessWidget {
     final totalCash = (rider['cash_in_hand'] as num?)?.toDouble() ?? 0.0;
 
     return Container(
-      padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))]),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 16, offset: const Offset(0, 4))]),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Stack(children: [CircleAvatar(radius: 28, backgroundColor: AppColors.background, backgroundImage: (avatar != null && avatar.isNotEmpty) ? NetworkImage(avatar) : null, child: (avatar == null || avatar.isEmpty) ? Text(name.isNotEmpty ? name[0].toUpperCase() : 'R', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.primary)) : null), Positioned(bottom: 0, right: 0, child: Container(width: 14, height: 14, decoration: BoxDecoration(color: isOnline ? AppColors.success : Colors.grey.shade400, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2.5))))]),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Stack(children: [CircleAvatar(radius: 30, backgroundColor: AppColors.background, backgroundImage: (avatar != null && avatar.isNotEmpty) ? NetworkImage(avatar) : null, child: (avatar == null || avatar.isEmpty) ? Text(name.isNotEmpty ? name[0].toUpperCase() : 'R', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.primary)) : null), Positioned(bottom: 2, right: 2, child: Container(width: 14, height: 14, decoration: BoxDecoration(color: isOnline ? AppColors.success : Colors.grey.shade400, shape: BoxShape.circle, border: Border.all(color: AppColors.surface, width: 2.5))))]),
             const SizedBox(width: 20),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                Text(name, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.text)), const SizedBox(width: 12),
-                if (isSuperAdmin) GestureDetector(onTap: onEdit, child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.edit_square, color: AppColors.primary, size: 16)))
+                Text(name, style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.text)), const SizedBox(width: 12),
+                if (isSuperAdmin) InkWell(onTap: onEdit, borderRadius: BorderRadius.circular(6), child: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.edit_rounded, color: AppColors.primary, size: 14)))
               ]),
-              const SizedBox(height: 6), Text('$phone  •  $plate', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext)), const SizedBox(height: 8),
-              Row(children: [_chip('${_vehicleEmoji(vehicle)} $vehicle', AppColors.primary), const SizedBox(width: 8), _chip('⭐ ${rating.toStringAsFixed(1)}', AppColors.warning), const SizedBox(width: 8), _chip('$trips trips', AppColors.success)]),
+              const SizedBox(height: 6), Text('$phone  •  $plate', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500)), const SizedBox(height: 12),
+              Row(children: [_chip('${_vehicleEmoji(vehicle)} ${vehicle.toUpperCase()}', AppColors.primary), const SizedBox(width: 8), _chip('⭐ ${rating.toStringAsFixed(1)}', AppColors.warning), const SizedBox(width: 8), _chip('$trips trips', AppColors.success)]),
             ])),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(isOnline ? 'Online' : 'Offline', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: isOnline ? AppColors.success : Colors.grey.shade500))),
-              const SizedBox(height: 8), Transform.scale(scale: 0.85, child: Switch.adaptive(value: isActive, activeColor: AppColors.primary, onChanged: isSuperAdmin ? (_) => onToggleActive(rider['id'] as String, isActive) : null)), Text(isActive ? 'Active' : 'Inactive', style: GoogleFonts.inter(fontSize: 11, color: AppColors.subtext, fontWeight: FontWeight.w500)),
+              Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(isOnline ? 'ONLINE' : 'OFFLINE', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: isOnline ? AppColors.success : Colors.grey.shade600))),
+              const SizedBox(height: 12),
+              Row(children: [Text(isActive ? 'Active' : 'Inactive', style: GoogleFonts.inter(fontSize: 12, color: isActive ? AppColors.text : AppColors.subtext, fontWeight: FontWeight.w600)), const SizedBox(width: 8), Transform.scale(scale: 0.8, child: Switch.adaptive(value: isActive, activeColor: AppColors.primary, inactiveTrackColor: Colors.grey.shade200, onChanged: isSuperAdmin ? (_) => onToggleActive(rider['id'] as String, isActive) : null))]),
             ]),
           ]),
-          const SizedBox(height: 20),
-          const Divider(height: 1),
+          const SizedBox(height: 24),
+
+          // Enhanced Cash & Actions Row
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border.withOpacity(0.6))),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(children: [
+                  Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.success.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.account_balance_wallet_rounded, color: AppColors.success, size: 22)),
+                  const SizedBox(width: 20),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Today\'s Cash', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 2),
+                    Text('৳${todayCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.text)),
+                  ]),
+                  Container(height: 40, width: 1, color: AppColors.border, margin: const EdgeInsets.symmetric(horizontal: 24)),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Total Due Amount', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 2),
+                    Text('৳${totalCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: totalCash > 0 ? AppColors.error : AppColors.text)),
+                  ]),
+                ]),
+                ElevatedButton.icon(
+                    onPressed: totalCash > 0 ? onCollectCash : null,
+                    icon: const Icon(Icons.price_check_rounded, size: 18),
+                    label: Text('Collect Cash', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white, disabledBackgroundColor: AppColors.border, disabledForegroundColor: AppColors.subtext, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)))
+                )
+              ],
+            ),
+          ),
           const SizedBox(height: 16),
-          // CASH TRACKING UI
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(children: [
-                Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.account_balance_wallet_rounded, color: Colors.green, size: 20)),
-                const SizedBox(width: 16),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Today\'s Cash', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)),
-                  Text('৳${todayCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.text)),
-                ]),
-                const SizedBox(width: 32),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Total Due Amount', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)),
-                  Text('৳${totalCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: totalCash > 0 ? Colors.red.shade600 : AppColors.text)),
-                ]),
-              ]),
-              ElevatedButton.icon(
-                  onPressed: totalCash > 0 ? onCollectCash : null,
-                  icon: const Icon(Icons.price_check_rounded, size: 18),
-                  label: Text('Collect Cash', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, disabledBackgroundColor: Colors.grey.shade300, disabledForegroundColor: Colors.grey.shade500, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)))
-              )
+              OutlinedButton.icon(
+                  onPressed: onOrderHistory,
+                  icon: const Icon(Icons.receipt_long_rounded, size: 16),
+                  label: Text('Order History', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppColors.primary, side: BorderSide(color: AppColors.primary.withOpacity(0.3)), backgroundColor: AppColors.primary.withOpacity(0.04), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0)
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                  onPressed: onCashHistory,
+                  icon: const Icon(Icons.history_rounded, size: 16),
+                  label: Text('Cash Logs', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppColors.text, side: BorderSide(color: AppColors.border), backgroundColor: AppColors.surface, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0)
+              ),
             ],
           )
         ],
       ),
     );
   }
-  Widget _chip(String label, Color color) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Text(label, style: GoogleFonts.inter(fontSize: 11, color: color, fontWeight: FontWeight.bold)));
+  Widget _chip(String label, Color color) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(label, style: GoogleFonts.inter(fontSize: 10, color: color, fontWeight: FontWeight.bold)));
 }
 
-// ─── NEW COLLECT CASH DIALOG ──────────────────────────────────────────────────
+// ─── ORDER HISTORY DIALOG ────────────────────────────────────────────────
+class _RiderOrderHistoryDialog extends StatefulWidget {
+  final String riderId, riderName;
+  const _RiderOrderHistoryDialog({required this.riderId, required this.riderName});
+  @override State<_RiderOrderHistoryDialog> createState() => _RiderOrderHistoryDialogState();
+}
+
+class _RiderOrderHistoryDialogState extends State<_RiderOrderHistoryDialog> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _orders = [];
+
+  int _selectedMonth = DateTime.now().month;
+  int _selectedYear = DateTime.now().year;
+  String _sortOption = 'Newest First';
+
+  final List<String> _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final List<int> _years = List.generate(5, (i) => DateTime.now().year - i);
+
+  @override void initState() { super.initState(); _fetchHistory(); }
+
+  Future<void> _fetchHistory() async {
+    setState(() => _loading = true);
+    try {
+      final startDate = DateTime(_selectedYear, _selectedMonth, 1).toUtc().toIso8601String();
+      final endDate = DateTime(_selectedYear, _selectedMonth + 1, 0, 23, 59, 59).toUtc().toIso8601String();
+
+      final ordersRes = await supabase.from(AppConstants.ordersTable)
+          .select('id, order_number, total_price, status, updated_at, pickup_rider_id, delivery_rider_id')
+          .or('pickup_rider_id.eq.${widget.riderId},delivery_rider_id.eq.${widget.riderId}')
+          .gte('updated_at', startDate)
+          .lte('updated_at', endDate);
+
+      final ratingsRes = await supabase.from('rider_ratings').select('order_id, stars').eq('rider_id', widget.riderId);
+      final ratingsList = List<Map<String, dynamic>>.from(ratingsRes);
+
+      List<Map<String, dynamic>> merged = [];
+      for (var o in ordersRes) {
+        var ratingData = ratingsList.where((r) => r['order_id'] == o['id']).toList();
+        double stars = 0.0;
+        if(ratingData.isNotEmpty) {
+          stars = ratingData.map((e) => (e['stars'] as num).toDouble()).reduce((a, b) => a + b) / ratingData.length;
+        }
+        merged.add({...o, 'stars': stars});
+      }
+
+      if (_sortOption == 'Newest First') merged.sort((a,b) => (b['updated_at'] ?? '').compareTo(a['updated_at'] ?? ''));
+      else if (_sortOption == 'Oldest First') merged.sort((a,b) => (a['updated_at'] ?? '').compareTo(b['updated_at'] ?? ''));
+      else if (_sortOption == 'Highest Rating') merged.sort((a,b) => (b['stars'] as double).compareTo(a['stars'] as double));
+      else if (_sortOption == 'Lowest Rating') merged.sort((a,b) => (a['stars'] as double).compareTo(b['stars'] as double));
+
+      if(mounted) setState(() { _orders = merged; _loading = false; });
+    } catch (e) {
+      if(mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 600, maxHeight: 750), child: Padding(padding: const EdgeInsets.all(32), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.receipt_long_rounded, color: AppColors.primary, size: 24)), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Order History', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)), Text(widget.riderName, style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500))])), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
+        const SizedBox(height: 24),
+        Row(children: [
+          Expanded(child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: DropdownButtonHideUnderline(child: DropdownButton<int>(value: _selectedMonth, isExpanded: true, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: List.generate(12, (i) => DropdownMenuItem(value: i+1, child: Text(_months[i], style: GoogleFonts.inter(fontSize: 14)))), onChanged: (v) { setState(() => _selectedMonth = v!); _fetchHistory(); })))),
+          const SizedBox(width: 12),
+          Expanded(child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: DropdownButtonHideUnderline(child: DropdownButton<int>(value: _selectedYear, isExpanded: true, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: _years.map((y) => DropdownMenuItem(value: y, child: Text(y.toString(), style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) { setState(() => _selectedYear = v!); _fetchHistory(); })))),
+          const SizedBox(width: 12),
+          Expanded(flex: 2, child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _sortOption, isExpanded: true, icon: const Icon(Icons.sort_rounded, size: 20), items: ['Newest First', 'Oldest First', 'Highest Rating', 'Lowest Rating'].map((s) => DropdownMenuItem(value: s, child: Text(s, style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) { setState(() => _sortOption = v!); _fetchHistory(); })))),
+        ]),
+        const SizedBox(height: 24), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 16),
+
+        Expanded(child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _orders.isEmpty
+            ? Center(child: Text('No completed orders in this period.', style: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14)))
+            : ListView.separated(
+            physics: const BouncingScrollPhysics(),
+            itemCount: _orders.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (ctx, i) {
+              final o = _orders[i];
+              final status = o['status'] ?? '';
+              bool picked = o['pickup_rider_id'] == widget.riderId;
+              bool deliv = o['delivery_rider_id'] == widget.riderId;
+              String tag = status == 'delivered' ? (picked && deliv ? 'ROUND TRIP' : picked ? 'PICKUP ONLY' : 'DELIVERY ONLY') : status.toUpperCase();
+              String dateStr = '';
+              if (o['updated_at'] != null) {
+                final d = DateTime.parse(o['updated_at']).toLocal();
+                dateStr = '${d.day} ${_months[d.month-1]} ${d.year}';
+              }
+              double stars = o['stars'] ?? 0.0;
+
+              return Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border.withOpacity(0.6))),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('#${o['order_number']}', style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.text)),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: ShapeDecoration(shape: const StadiumBorder(), color: AppColors.primary.withOpacity(0.08)), child: Text(tag, style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primary))),
+                      const SizedBox(width: 10),
+                      Text(dateStr, style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)),
+                    ])
+                  ]),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text('৳${((o['total_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.text)),
+                    const SizedBox(height: 6),
+                    if (stars > 0) Row(children: [const Icon(Icons.star_rounded, color: AppColors.warning, size: 14), const SizedBox(width: 4), Text(stars.toStringAsFixed(1), style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.warning))])
+                    else Text('No Rating', style: GoogleFonts.inter(fontSize: 11, color: AppColors.subtext)),
+                  ])
+                ]),
+              );
+            }
+        )
+        )
+      ]))),
+    );
+  }
+}
+
+// ─── CASH SUBMISSION HISTORY DIALOG ──────────────────────────────────────
+class _RiderCashHistoryDialog extends StatefulWidget {
+  final String riderId, riderName;
+  const _RiderCashHistoryDialog({required this.riderId, required this.riderName});
+  @override State<_RiderCashHistoryDialog> createState() => _RiderCashHistoryDialogState();
+}
+
+class _RiderCashHistoryDialogState extends State<_RiderCashHistoryDialog> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _submissions = [];
+  final List<String> _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  @override void initState() { super.initState(); _fetchCashHistory(); }
+
+  Future<void> _fetchCashHistory() async {
+    try {
+      final res = await supabase.from('rider_cash_submissions')
+          .select()
+          .eq('rider_id', widget.riderId)
+          .order('submitted_at', ascending: false);
+
+      if(mounted) setState(() { _submissions = List<Map<String, dynamic>>.from(res); _loading = false; });
+    } catch (e) {
+      if(mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  @override Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 500, maxHeight: 600), child: Padding(padding: const EdgeInsets.all(32), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.success.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.history_rounded, color: AppColors.success, size: 24)), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Cash Logs', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)), Text(widget.riderName, style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500))])), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
+        const SizedBox(height: 24), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 16),
+
+        Expanded(child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Center(child: Text('Database Error:\n$_error', textAlign: TextAlign.center, style: GoogleFonts.inter(color: AppColors.error, fontWeight: FontWeight.w600)))
+            : _submissions.isEmpty
+            ? Center(child: Text('No cash submissions found.', style: GoogleFonts.inter(color: AppColors.subtext)))
+            : ListView.separated(
+            physics: const BouncingScrollPhysics(),
+            itemCount: _submissions.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (ctx, i) {
+              final sub = _submissions[i];
+              String dateStr = ''; String timeStr = '';
+              if (sub['submitted_at'] != null) {
+                final d = DateTime.parse(sub['submitted_at']).toLocal();
+                dateStr = '${d.day} ${_months[d.month-1]} ${d.year}';
+                timeStr = '${d.hour > 12 ? d.hour - 12 : (d.hour == 0 ? 12 : d.hour)}:${d.minute.toString().padLeft(2,'0')} ${d.hour >= 12 ? 'PM' : 'AM'}';
+              }
+
+              return Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border.withOpacity(0.6))),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Row(children: [
+                    Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)), child: const Icon(Icons.monetization_on_rounded, color: AppColors.success, size: 18)),
+                    const SizedBox(width: 16),
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Cash Collected', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text)),
+                      const SizedBox(height: 4),
+                      Text('$dateStr • $timeStr', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext)),
+                    ])
+                  ]),
+                  Text('৳${((sub['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.success)),
+                ]),
+              );
+            }
+        )
+        )
+      ]))),
+    );
+  }
+}
+
+// ─── COLLECT CASH DIALOG ────────────────────────────────────────────────
 class _CollectCashDialog extends StatefulWidget {
   final String riderId, riderName; final double todayCash, totalCash; final VoidCallback onSuccess;
   const _CollectCashDialog({required this.riderId, required this.riderName, required this.todayCash, required this.totalCash, required this.onSuccess});
@@ -252,42 +470,20 @@ class _CollectCashDialog extends StatefulWidget {
 
 class _CollectCashDialogState extends State<_CollectCashDialog> {
   final _amtCtrl = TextEditingController();
-  bool _loading = false;
-  String? _error;
+  bool _loading = false; String? _error;
 
-  @override
-  void initState() {
-    super.initState();
-    _amtCtrl.text = widget.totalCash.toStringAsFixed(0);
-  }
+  @override void initState() { super.initState(); _amtCtrl.text = widget.totalCash.toStringAsFixed(0); }
 
   Future<void> _sendNotificationToRider(String targetRiderId, double amount) async {
-    const String oneSignalAppId = ApiKeys.oneSignalAppId;
-    const String oneSignalRestApiKey = ApiKeys.oneSignalRestKey;
-
+    const String oneSignalAppId = ApiKeys.oneSignalAppId; const String oneSignalRestApiKey = ApiKeys.oneSignalRestKey;
     try {
       final response = await http.post(
         Uri.parse('https://onesignal.com/api/v1/notifications'),
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Authorization': 'Basic $oneSignalRestApiKey',
-        },
-        body: jsonEncode({
-          'app_id': oneSignalAppId,
-          'target_channel': 'push',
-          'include_aliases': {
-            'external_id': [targetRiderId]
-          },
-          'headings': {'en': 'Cash Collected! 💵'},
-          'contents': {'en': 'Submitted In Hand Cash: ৳${amount.toStringAsFixed(0)} Successfully'},
-        }),
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': 'Basic $oneSignalRestApiKey', },
+        body: jsonEncode({ 'app_id': oneSignalAppId, 'target_channel': 'push', 'include_aliases': { 'external_id': [targetRiderId] }, 'headings': {'en': 'Cash Collected! 💵'}, 'contents': {'en': 'Submitted In Hand Cash: ৳${amount.toStringAsFixed(0)} Successfully'}, }),
       );
-
-      final res = jsonDecode(response.body);
-      if (res.containsKey('errors')) debugPrint('OneSignal Error: ${res['errors']}');
-    } catch (e) {
-      debugPrint('Error: $e');
-    }
+      final res = jsonDecode(response.body); if (res.containsKey('errors')) debugPrint('OneSignal Error: ${res['errors']}');
+    } catch (e) { debugPrint('Error: $e'); }
   }
 
   Future<void> _submitCash() async {
@@ -297,48 +493,34 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
 
     setState(() { _loading = true; _error = null; });
     try {
-      // 🚀 FIXED RPC: Uses correct parameter 'p_amount' for Numeric function
-      await supabase.rpc('collect_rider_cash', params: {
-        'p_rider_id': widget.riderId,
-        'p_amount': amt,
-      });
-
+      await supabase.rpc('collect_rider_cash', params: { 'p_rider_id': widget.riderId, 'p_amount': amt, });
       await _sendNotificationToRider(widget.riderId, amt);
-
-      widget.onSuccess();
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      setState(() { _loading = false; _error = e.toString(); });
-    }
+      widget.onSuccess(); if (mounted) Navigator.pop(context);
+    } catch (e) { setState(() { _loading = false; _error = e.toString(); }); }
   }
 
   @override Widget build(BuildContext context) {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
-      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.monetization_on_rounded, color: Colors.green, size: 24)), const SizedBox(width: 16), Text('Collect Cash', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), const Spacer(), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close, color: AppColors.subtext))]),
-        const SizedBox(height: 24),
-        Text('Collecting from ${widget.riderName}', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
-        const SizedBox(height: 16),
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.success.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.monetization_on_rounded, color: AppColors.success, size: 24)), const SizedBox(width: 16), Text('Collect Cash', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), const Spacer(), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
+        const SizedBox(height: 24), Text('Collecting from ${widget.riderName}', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext, fontWeight: FontWeight.w500)), const SizedBox(height: 16),
         Container(
-          padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
+          padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border.withOpacity(0.5))),
           child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            Column(children: [Text('Today\'s Cash', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext)), const SizedBox(height: 4), Text('৳${widget.todayCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.text))]),
+            Column(children: [Text('Today\'s Cash', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)), const SizedBox(height: 4), Text('৳${widget.todayCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text))]),
             Container(width: 1, height: 40, color: AppColors.border),
-            Column(children: [Text('Total Due', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext)), const SizedBox(height: 4), Text('৳${widget.totalCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red.shade600))]),
+            Column(children: [Text('Total Due', style: GoogleFonts.inter(fontSize: 12, color: AppColors.subtext, fontWeight: FontWeight.w500)), const SizedBox(height: 4), Text('৳${widget.totalCash.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.error))]),
           ]),
         ),
-        const SizedBox(height: 24),
-        Text('Amount to Collect (৳)', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)), const SizedBox(height: 8),
-        TextField(controller: _amtCtrl, keyboardType: TextInputType.number, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold), decoration: InputDecoration(prefixIcon: const Icon(Icons.payments_outlined, color: Colors.grey), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.green, width: 2)))),
-        if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Text(_error!, style: GoogleFonts.inter(color: Colors.red, fontSize: 13, fontWeight: FontWeight.w600)))),
-        const SizedBox(height: 32),
-        SizedBox(width: double.infinity, height: 56, child: ElevatedButton(onPressed: _loading ? null : _submitCash, style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _loading ? const CircularProgressIndicator(color: Colors.white) : Text('Confirm Collection', style: GoogleFonts.inter(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))),
+        const SizedBox(height: 24), Text('Amount to Collect (৳)', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)), const SizedBox(height: 8),
+        TextField(controller: _amtCtrl, keyboardType: TextInputType.number, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold), decoration: InputDecoration(prefixIcon: Icon(Icons.payments_rounded, color: AppColors.subtext), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.success, width: 1.5)))),
+        if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Text(_error!, style: GoogleFonts.inter(color: AppColors.error, fontSize: 13, fontWeight: FontWeight.w600)))),
+        const SizedBox(height: 32), SizedBox(width: double.infinity, height: 56, child: ElevatedButton(onPressed: _loading ? null : _submitCash, style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0), child: _loading ? const CircularProgressIndicator(color: Colors.white) : Text('Confirm Collection', style: GoogleFonts.inter(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)))),
       ]))),
     );
   }
 }
-// ──────────────────────────────────────────────────────────────────────────────
 
 class _RiderFormDialog extends StatefulWidget {
   final VoidCallback onSaved; final Map<String, dynamic>? rider; const _RiderFormDialog({required this.onSaved, this.rider});
@@ -346,13 +528,22 @@ class _RiderFormDialog extends StatefulWidget {
 }
 
 class _RiderFormDialogState extends State<_RiderFormDialog> {
-  final _formKey = GlobalKey<FormState>(); final _nameCtrl = TextEditingController(); final _phoneCtrl = TextEditingController(); final _plateCtrl = TextEditingController();
+  final _formKey = GlobalKey<FormState>(); final _nameCtrl = TextEditingController(); final _phoneCtrl = TextEditingController(); final _passwordCtrl = TextEditingController(); final _plateCtrl = TextEditingController();
   bool _loading = false; String _selectedVehicle = 'motorcycle'; final List<String> _vehicleTypes = ['motorcycle', 'bicycle', 'car', 'van'];
   Uint8List? _avatarBytes; String? _existingAvatarUrl;
 
+  bool _obscurePassword = true; // --- NEW: Toggle State ---
+
   @override void initState() {
     super.initState();
-    if (widget.rider != null) { _nameCtrl.text = widget.rider!['full_name'] ?? ''; _phoneCtrl.text = widget.rider!['phone'] ?? ''; _plateCtrl.text = widget.rider!['vehicle_plate'] ?? ''; _selectedVehicle = widget.rider!['vehicle_type'] ?? 'motorcycle'; _existingAvatarUrl = widget.rider!['avatar_url']; }
+    if (widget.rider != null) {
+      _nameCtrl.text = widget.rider!['full_name'] ?? '';
+      _phoneCtrl.text = widget.rider!['phone'] ?? '';
+      _passwordCtrl.text = widget.rider!['password'] ?? '';
+      _plateCtrl.text = widget.rider!['vehicle_plate'] ?? '';
+      _selectedVehicle = widget.rider!['vehicle_type'] ?? 'motorcycle';
+      _existingAvatarUrl = widget.rider!['avatar_url'];
+    }
   }
 
   Future<void> _pickImage() async {
@@ -378,36 +569,71 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
         await supabase.storage.from('avatars').uploadBinary(storagePath, _avatarBytes!, fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
         finalAvatarUrl = supabase.storage.from('avatars').getPublicUrl(storagePath);
       }
-      final Map<String, dynamic> riderData = {'full_name': _nameCtrl.text.trim(), 'phone': _phoneCtrl.text.trim(), 'vehicle_type': _selectedVehicle, 'vehicle_plate': plateValue, 'avatar_url': finalAvatarUrl};
-      if (widget.rider == null) { riderData['id'] = _generateUuid(); riderData['is_active'] = true; riderData['is_online'] = false; riderData['rating'] = 5.0; riderData['total_trips'] = 0; riderData['cash_in_hand'] = 0; await supabase.from(AppConstants.ridersTable).insert(riderData); }
-      else { await supabase.from(AppConstants.ridersTable).update(riderData).eq('id', widget.rider!['id']); }
+
+      final Map<String, dynamic> riderData = {
+        'full_name': _nameCtrl.text.trim(),
+        'phone': _phoneCtrl.text.trim(),
+        'password': _passwordCtrl.text.trim(),
+        'vehicle_type': _selectedVehicle,
+        'vehicle_plate': plateValue,
+        'avatar_url': finalAvatarUrl
+      };
+
+      if (widget.rider == null) {
+        riderData['id'] = _generateUuid(); riderData['is_active'] = true; riderData['is_online'] = false; riderData['rating'] = 5.0; riderData['total_trips'] = 0; riderData['cash_in_hand'] = 0;
+        await supabase.from(AppConstants.ridersTable).insert(riderData);
+      } else {
+        await supabase.from(AppConstants.ridersTable).update(riderData).eq('id', widget.rider!['id']);
+      }
       widget.onSaved(); if (mounted) Navigator.pop(context);
     } catch (e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error)); }
     setState(() => _loading = false);
   }
 
-  InputDecoration _deco(String hint) => InputDecoration(hintText: hint, hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)), errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.error)));
+  // --- NEW: Added suffixIcon parameter to helper function ---
+  InputDecoration _deco(String hint, {Widget? suffixIcon}) => InputDecoration(hintText: hint, hintStyle: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)), errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.error)), suffixIcon: suffixIcon);
   Widget _label(String text) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(text, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)));
 
   @override Widget build(BuildContext context) {
     final isBicycle = _selectedVehicle == 'bicycle'; final isEditMode = widget.rider != null;
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
-      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 520), child: Padding(padding: const EdgeInsets.all(32), child: Form(key: _formKey, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(isEditMode ? Icons.edit_document : Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 24)), const SizedBox(width: 16), Text(isEditMode ? 'Edit Rider' : 'Add New Rider', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), const Spacer(), IconButton(onPressed: () => Navigator.pop(context), icon:  Icon(Icons.close, color: AppColors.subtext))]),
-        const SizedBox(height: 24), const Divider(height: 1), const SizedBox(height: 24),
-        GestureDetector(onTap: _pickImage, child: Stack(children: [CircleAvatar(radius: 56, backgroundColor: AppColors.background, backgroundImage: _avatarBytes != null ? MemoryImage(_avatarBytes!) : (_existingAvatarUrl != null && _existingAvatarUrl!.isNotEmpty ? NetworkImage(_existingAvatarUrl!) as ImageProvider : null), child: (_avatarBytes == null && (_existingAvatarUrl == null || _existingAvatarUrl!.isEmpty)) ? Icon(Icons.add_a_photo, color: Colors.grey.shade400, size: 36) : null), Positioned(bottom: 0, right: 0, child: Container(padding: const EdgeInsets.all(8), decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle), child: const Icon(Icons.camera_alt, color: Colors.white, size: 16)))])),
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 540), child: Padding(padding: const EdgeInsets.all(32), child: Form(key: _formKey, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(isEditMode ? Icons.edit_document : Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 24)), const SizedBox(width: 16), Text(isEditMode ? 'Edit Rider' : 'Add New Rider', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), const Spacer(), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
+        const SizedBox(height: 24), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 24),
+        GestureDetector(onTap: _pickImage, child: Stack(children: [CircleAvatar(radius: 56, backgroundColor: AppColors.background, backgroundImage: _avatarBytes != null ? MemoryImage(_avatarBytes!) : (_existingAvatarUrl != null && _existingAvatarUrl!.isNotEmpty ? NetworkImage(_existingAvatarUrl!) as ImageProvider : null), child: (_avatarBytes == null && (_existingAvatarUrl == null || _existingAvatarUrl!.isEmpty)) ? Icon(Icons.add_a_photo_rounded, color: AppColors.subtext, size: 32) : null), Positioned(bottom: 0, right: 0, child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: AppColors.surface, width: 2.5)), child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 14)))])),
         const SizedBox(height: 32),
         _label('Rider Full Name *'), TextFormField(controller: _nameCtrl, decoration: _deco('Enter rider name'), validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null), const SizedBox(height: 20),
-        _label('Phone Number *'), TextFormField(controller: _phoneCtrl, keyboardType: TextInputType.phone, decoration: _deco('Enter phone number'), validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null), const SizedBox(height: 20),
-        Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Vehicle Type'), DropdownButtonFormField<String>(value: _selectedVehicle, items: _vehicleTypes.map((s) => DropdownMenuItem(value: s, child: Text(s.toUpperCase(), style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedVehicle = v!), decoration: _deco(''))])), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label(isBicycle ? 'Vehicle Plate (Optional)' : 'Vehicle Plate *'), TextFormField(controller: _plateCtrl, decoration: _deco(isBicycle ? 'Leave blank for N/A' : 'e.g. DHK-1234'), validator: (v) => (!isBicycle && (v?.trim().isEmpty ?? true)) ? 'Required' : null)]))]),
-        const SizedBox(height: 32), const Divider(height: 1), const SizedBox(height: 24),
-        Row(children: [Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 18), side:  BorderSide(color: AppColors.border), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text('Cancel', style: GoogleFonts.inter(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)))), const SizedBox(width: 16), Expanded(child: _GradientButton(label: _loading ? 'Saving…' : (isEditMode ? 'Update Rider' : 'Add Rider'), icon: Icons.check, onPressed: _loading ? null : _submit))]),
+
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Phone Number *'), TextFormField(controller: _phoneCtrl, keyboardType: TextInputType.phone, decoration: _deco('Enter phone number'), validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null)])),
+          const SizedBox(width: 16),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _label('Assign Password *'),
+            TextFormField(
+                controller: _passwordCtrl,
+                obscureText: _obscurePassword, // --- NEW: Controlled visibility ---
+                decoration: _deco(
+                    'Create password',
+                    // --- NEW: Eye Icon Button ---
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded, color: AppColors.subtext, size: 20),
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    )
+                ),
+                validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null
+            )
+          ]))
+        ]),
+        const SizedBox(height: 20),
+
+        Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Vehicle Type'), DropdownButtonFormField<String>(value: _selectedVehicle, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: _vehicleTypes.map((s) => DropdownMenuItem(value: s, child: Text(s.toUpperCase(), style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedVehicle = v!), decoration: _deco(''))])), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label(isBicycle ? 'Vehicle Plate (Optional)' : 'Vehicle Plate *'), TextFormField(controller: _plateCtrl, decoration: _deco(isBicycle ? 'Leave blank for N/A' : 'e.g. DHK-1234'), validator: (v) => (!isBicycle && (v?.trim().isEmpty ?? true)) ? 'Required' : null)]))]),
+        const SizedBox(height: 32), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 24),
+        Row(children: [Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 18), side: BorderSide(color: AppColors.border), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text('Cancel', style: GoogleFonts.inter(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)))), const SizedBox(width: 16), Expanded(child: _GradientButton(label: _loading ? 'Saving…' : (isEditMode ? 'Update Rider' : 'Add Rider'), icon: Icons.check_rounded, onPressed: _loading ? null : _submit))]),
       ]))))),
     );
   }
 }
-
 class _GradientButton extends StatelessWidget {
   final String label; final IconData? icon; final VoidCallback? onPressed;
   const _GradientButton({required this.label, this.icon, required this.onPressed});
