@@ -31,6 +31,16 @@ class OrderScreenState extends State<OrderScreen> {
   @override void initState() { super.initState(); _loadInitialData(); _subscribeRealtime(); }
   @override void dispose() { _channel?.unsubscribe(); super.dispose(); }
 
+  void setStatusFilter(String targetStatus) {
+    if (_statuses.contains(targetStatus)) {
+      setState(() {
+        _statusFilter = targetStatus;
+        _applyFilter();
+      });
+    }
+  }
+
+
   void openAddOrderDialog([Map<String, dynamic>? existingOrder]) => _showAddDialog(existingOrder);
 
   void _subscribeRealtime() {

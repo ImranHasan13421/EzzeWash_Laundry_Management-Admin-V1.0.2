@@ -5,6 +5,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme/color/app_colors.dart';
 import '../../main.dart';
 
+// --- DYNAMIC THEME HELPERS ---
+bool _isDark(BuildContext context) => Theme.of(context).brightness == Brightness.dark;
+Color _bgColor(BuildContext context) => _isDark(context) ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+Color _surfaceColor(BuildContext context) => _isDark(context) ? const Color(0xFF1E293B) : Colors.white;
+Color _textColor(BuildContext context) => _isDark(context) ? const Color(0xFFF8FAFC) : const Color(0xFF1E293B);
+Color _subtextColor(BuildContext context) => _isDark(context) ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+Color _borderColor(BuildContext context) => _isDark(context) ? const Color(0xFF475569) : const Color(0xFFE2E8F0);
+
 class SettingsScreen extends StatefulWidget {
   final bool isSuperAdmin;
   final String? managerStoreId;
@@ -52,8 +60,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _nameCtrl.text = currentUser!.userMetadata?['full_name'] as String? ?? (widget.isSuperAdmin ? 'MD. Imran Hasan' : 'Manager');
       _phoneCtrl.text = currentUser!.userMetadata?['phone'] as String? ?? '';
       _emailCtrl.text = currentUser!.email ?? 'imranhasan13421@gmail.com';
-      debugPrint("Logged in as: ${_nameCtrl.text}");
-      debugPrint("My Metadata Role: ${currentUser!.userMetadata?['role']}");
       final createdAt = DateTime.tryParse(currentUser!.createdAt);
       if (createdAt != null) {
         const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -85,9 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadTeamMembers() async {
     try {
-      // 1. Fetch name AND city for the dropdown
       final storesData = await Supabase.instance.client.from('stores').select('id, name, city');
-      // 2. Fetch joined stores(name, city) for the team list
       final data = await Supabase.instance.client.from('team_members').select('*, stores(name, city)').order('created_at');
 
       setState(() {
@@ -110,53 +114,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (_tab >= tabs.length) _tab = 0;
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(
-        height: 72, padding: const EdgeInsets.symmetric(horizontal: 32), decoration: BoxDecoration(color: AppColors.surface, border: Border(bottom: BorderSide(color: AppColors.border))),
-        child: Row(children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text('Settings', style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.text)),
-            Text('Manage your account, team, and business preferences', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
-          ]),
-        ]),
-      ),
-
-      Expanded(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-            : SingleChildScrollView(
-          padding: const EdgeInsets.all(32),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(color: AppColors.border.withOpacity(0.4), borderRadius: BorderRadius.circular(12)),
-              child: Row(mainAxisSize: MainAxisSize.min, children: List.generate(tabs.length, (i) {
-                final sel = _tab == i;
-                return GestureDetector(
-                  onTap: () => setState(() { _tab = i; _isInviting = false; }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    decoration: BoxDecoration(color: sel ? AppColors.surface : Colors.transparent, borderRadius: BorderRadius.circular(8), boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 2))] : []),
-                    child: Row(children: [
-                      Icon(tabs[i]['icon'] as IconData, size: 18, color: sel ? AppColors.primary : AppColors.subtext),
-                      const SizedBox(width: 8),
-                      Text(tabs[i]['name'] as String, style: GoogleFonts.inter(color: sel ? AppColors.text : AppColors.subtext, fontWeight: FontWeight.w600, fontSize: 14)),
-                    ]),
-                  ),
-                );
-              })),
-            ),
-            const SizedBox(height: 32),
-
-            if (tabs[_tab]['id'] == 'profile') _profileTab(),
-            if (tabs[_tab]['id'] == 'security') _securityTab(),
-            if (tabs[_tab]['id'] == 'team') _teamTab(),
-            if (tabs[_tab]['id'] == 'business') _businessTab(),
+    return Container(
+      color: _bgColor(context),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          height: 72, padding: const EdgeInsets.symmetric(horizontal: 32),
+          decoration: BoxDecoration(color: _surfaceColor(context), border: Border(bottom: BorderSide(color: _borderColor(context), width: 1.5))),
+          child: Row(children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text('Settings', style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold, color: _textColor(context))),
+              Text('Manage your account, team, and business preferences', style: GoogleFonts.inter(fontSize: 14, color: _subtextColor(context))),
+            ]),
           ]),
         ),
-      ),
-    ]);
+
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+              : SingleChildScrollView(
+            padding: const EdgeInsets.all(32),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+              // --- MODERN SEGMENTED TAB SELECTOR ---
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFE2E8F0).withOpacity(0.7), borderRadius: BorderRadius.circular(14)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: List.generate(tabs.length, (i) {
+                  final sel = _tab == i;
+                  return GestureDetector(
+                    onTap: () => setState(() { _tab = i; _isInviting = false; }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      decoration: BoxDecoration(
+                          color: sel ? _surfaceColor(context) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.05), blurRadius: 8, offset: const Offset(0, 2))] : []
+                      ),
+                      child: Row(children: [
+                        Icon(tabs[i]['icon'] as IconData, size: 18, color: sel ? AppColors.primary : _subtextColor(context)),
+                        const SizedBox(width: 8),
+                        Text(tabs[i]['name'] as String, style: GoogleFonts.inter(color: sel ? _textColor(context) : _subtextColor(context), fontWeight: sel ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
+                      ]),
+                    ),
+                  );
+                })),
+              ),
+              const SizedBox(height: 32),
+
+              if (tabs[_tab]['id'] == 'profile') _profileTab(),
+              if (tabs[_tab]['id'] == 'security') _securityTab(),
+              if (tabs[_tab]['id'] == 'team') _teamTab(),
+              if (tabs[_tab]['id'] == 'business') _businessTab(),
+            ]),
+          ),
+        ),
+      ]),
+    );
   }
 
   Widget _profileTab() {
@@ -168,14 +182,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Row(children: [
               Container(
                 width: 72, height: 72,
-                decoration: BoxDecoration(gradient: AppColors.gradient, shape: BoxShape.circle, boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.2), blurRadius: 12, offset: const Offset(0, 4))]),
-                child: Center(child: Text(_nameCtrl.text.isNotEmpty ? _nameCtrl.text.substring(0, 2).toUpperCase() : 'A', style: GoogleFonts.outfit(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold))),
+                decoration: BoxDecoration(gradient: AppColors.gradient, shape: BoxShape.circle, boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))]),
+                child: Center(child: Text(_nameCtrl.text.isNotEmpty ? _nameCtrl.text[0].toUpperCase() : 'U', style: GoogleFonts.outfit(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold))),
               ),
               const SizedBox(width: 24),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(_nameCtrl.text, style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)),
+                Text(_nameCtrl.text, style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: _textColor(context))),
                 const SizedBox(height: 2),
-                Text(_emailCtrl.text, style: GoogleFonts.inter(fontSize: 15, color: AppColors.subtext)),
+                Text(_emailCtrl.text, style: GoogleFonts.inter(fontSize: 15, color: _subtextColor(context))),
                 const SizedBox(height: 8),
                 _roleBadge(widget.isSuperAdmin ? 'Super Admin' : 'Manager'),
               ])
@@ -193,7 +207,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Expanded(child: _textField('Joined', TextEditingController(text: _joinedDate), readOnly: true)),
             ]),
             const SizedBox(height: 32),
-            _actionButton('Save Changes', AppColors.primary, () async {
+            _actionButton('Save Changes', AppColors.primary, Icons.save_rounded, () async {
               setState(() => _isSaving = true);
               try {
                 await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'full_name': _nameCtrl.text.trim(), 'phone': _phoneCtrl.text.trim()}));
@@ -215,11 +229,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Dark Mode', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: AppColors.text)),
-                Text('Adjust the app theme to your preference', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext)),
+                Text('Dark Mode', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16, color: _textColor(context))),
+                const SizedBox(height: 4),
+                Text('Adjust the app theme to your preference', style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context))),
               ],
             ),
-            Switch(
+            Switch.adaptive(
               value: darkModeNotifier.value,
               activeColor: AppColors.primary,
               onChanged: (val) {
@@ -252,7 +267,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Expanded(child: _textField('Change Phone Number', _phoneCtrl, hint: '+880xxxxxxxxxx')),
           ]),
           const SizedBox(height: 32),
-          _actionButton('Save Changes', AppColors.primary, () async {
+          _actionButton('Save Security Settings', AppColors.primary, Icons.lock_outline_rounded, () async {
             setState(() => _isSaving = true);
             try {
               if (_passCtrl.text.isNotEmpty && _passCtrl.text.length >= 6) {
@@ -276,97 +291,104 @@ class _SettingsScreenState extends State<SettingsScreen> {
         subtitle: '${_teamMembers.length + 1} members with access',
         actionWidget: ElevatedButton.icon(
           onPressed: () => setState(() => _isInviting = !_isInviting),
-          icon: Icon(_isInviting ? Icons.close : Icons.person_add_outlined, color: AppColors.surface, size: 18),
-          label: Text(_isInviting ? 'Cancel' : 'Invite Member', style: GoogleFonts.inter(color: AppColors.surface, fontWeight: FontWeight.bold, fontSize: 14)),
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0),
+          icon: Icon(_isInviting ? Icons.close : Icons.person_add_outlined, color: Colors.white, size: 18),
+          label: Text(_isInviting ? 'Cancel' : 'Invite Member', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 2, shadowColor: AppColors.primary.withOpacity(0.5)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (_isInviting) ...[
-            Text('Invite a new team member', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.text)),
-            const SizedBox(height: 16),
-            Column(
-              children: [
-                Row(children: [
-                  Expanded(flex: 3, child: TextFormField(controller: _inviteEmailCtrl, decoration: _inputDeco(hint: 'Enter email address'), style: GoogleFonts.inter(fontSize: 14))),
-                  const SizedBox(width: 16),
-                  Expanded(flex: 1, child: DropdownButtonFormField<String>(value: _inviteRole, icon: const Icon(Icons.keyboard_arrow_down, size: 20), items: ['Manager'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _inviteRole = v!), decoration: _inputDeco())),
-                ]),
-                const SizedBox(height: 16),
-                Row(children: [
-                  Expanded(flex: 3, child: DropdownButtonFormField<String>(
-                      value: _inviteStoreId,
-                      hint: Text('Assign to Store', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
-                      icon: const Icon(Icons.storefront_outlined, size: 20),
-                      items: _storesList.map((s) => DropdownMenuItem(
-                          value: s['id'] as String,
-                          // SHOWS NAME AND CITY IN DROPDOWN
-                          child: Text('${s['name']} (${s['city']})', style: GoogleFonts.inter(fontSize: 14))
-                      )).toList(),
-                      onChanged: (v) => setState(() => _inviteStoreId = v),
-                      decoration: _inputDeco()
-                  )),
-                  const SizedBox(width: 16),
-                  Expanded(flex: 1, child: ElevatedButton(
-                      onPressed: _isSaving ? null : () async {
-                        if (_inviteEmailCtrl.text.isEmpty || _inviteStoreId == null) {
-                          _showToast('Please provide email and assign a store.', AppColors.warning);
-                          return;
-                        }
-                        setState(() => _isSaving = true);
-                        try {
-                          await Supabase.instance.client.from('team_members').insert({'email': _inviteEmailCtrl.text.trim(), 'role': _inviteRole, 'store_id': _inviteStoreId});
-                          _inviteEmailCtrl.clear(); _inviteStoreId = null;
-                          setState(() => _isInviting = false);
-                          await _loadTeamMembers();
-                          _showToast('Member added to whitelist! Invite them via Supabase Dashboard.', AppColors.success);
-                        } catch(e) {
-                          _showToast('Error adding member: $e', AppColors.error);
-                        }
-                        setState(() => _isSaving = false);
-                      },
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(vertical: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0),
-                      child: _isSaving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text('Add to Whitelist', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14))
-                  )),
-                ]),
-              ],
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF334155).withOpacity(0.3) : const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(16), border: Border.all(color: _borderColor(context))),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Invite a new team member', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: _textColor(context))),
+                  const SizedBox(height: 20),
+                  Row(children: [
+                    Expanded(flex: 3, child: _textField('Email Address', _inviteEmailCtrl, hint: 'Enter email address')),
+                    const SizedBox(width: 16),
+                    Expanded(flex: 1, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Role', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: _textColor(context))),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(value: _inviteRole, icon: const Icon(Icons.keyboard_arrow_down, size: 20), items: ['Manager'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.inter(fontSize: 14, color: _textColor(context))))).toList(), onChanged: (v) => setState(() => _inviteRole = v!), decoration: _inputDeco()),
+                    ])),
+                  ]),
+                  const SizedBox(height: 16),
+                  Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Expanded(flex: 3, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Assign to Store', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: _textColor(context))),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                          value: _inviteStoreId,
+                          hint: Text('Select Store', style: GoogleFonts.inter(fontSize: 14, color: _subtextColor(context))),
+                          icon: const Icon(Icons.storefront_outlined, size: 20),
+                          items: _storesList.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']} (${s['city']})', style: GoogleFonts.inter(fontSize: 14, color: _textColor(context))))).toList(),
+                          onChanged: (v) => setState(() => _inviteStoreId = v),
+                          decoration: _inputDeco()
+                      ),
+                    ])),
+                    const SizedBox(width: 16),
+                    Expanded(flex: 1, child: _actionButton('Add to Whitelist', AppColors.primary, Icons.check_circle_outline, () async {
+                      if (_inviteEmailCtrl.text.isEmpty || _inviteStoreId == null) {
+                        _showToast('Please provide email and assign a store.', AppColors.warning);
+                        return;
+                      }
+                      setState(() => _isSaving = true);
+                      try {
+                        await Supabase.instance.client.from('team_members').insert({'email': _inviteEmailCtrl.text.trim(), 'role': _inviteRole, 'store_id': _inviteStoreId});
+                        _inviteEmailCtrl.clear(); _inviteStoreId = null;
+                        setState(() => _isInviting = false);
+                        await _loadTeamMembers();
+                        _showToast('Member added to whitelist! Invite them via Supabase Dashboard.', AppColors.success);
+                      } catch(e) {
+                        _showToast('Error adding member: $e', AppColors.error);
+                      }
+                      setState(() => _isSaving = false);
+                    })),
+                  ]),
+                  const SizedBox(height: 20),
+                  Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.info.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.info.withOpacity(0.3))), child: Row(children: [const Icon(Icons.info_outline, color: AppColors.info, size: 20), const SizedBox(width: 12), Expanded(child: Text('App Security Note: After whitelisting here, you must officially invite them via your Supabase Dashboard (Authentication -> Users -> Invite).', style: GoogleFonts.inter(fontSize: 13, color: _textColor(context))))])),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.info.withOpacity(0.05), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.info.withOpacity(0.2))), child: Row(children: [const Icon(Icons.info_outline, color: AppColors.info, size: 20), const SizedBox(width: 12), Expanded(child: Text('App Security Note: After whitelisting here, you must officially invite them via your Supabase Dashboard (Authentication -> Users -> Invite).', style: GoogleFonts.inter(fontSize: 13, color: AppColors.text)))])),
             const SizedBox(height: 32),
           ],
 
+          // Team List Header
           Row(children: [
-            CircleAvatar(radius: 22, backgroundColor: AppColors.primary, child: Text('A', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
+            CircleAvatar(radius: 22, backgroundColor: AppColors.primary, child: Text('I', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
             const SizedBox(width: 16),
-            Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('MD. Imran Hasan', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15)), const SizedBox(height: 2), Text('imranhasan13421@gmail.com', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext))])),
+            Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('MD. Imran Hasan', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: _textColor(context))), const SizedBox(height: 2), Text('imranhasan13421@gmail.com', style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context)))])),
             Expanded(flex: 2, child: Row(children: [_roleBadge('Super Admin')])),
-            Expanded(flex: 2, child: Text('Global Access', style: GoogleFonts.inter(fontSize: 13, color: AppColors.primary, fontWeight: FontWeight.w600))),
-            const SizedBox(width: 46), // matches icon width to align
+            Expanded(flex: 2, child: Text('Global Access', style: GoogleFonts.inter(fontSize: 13, color: AppColors.primary, fontWeight: FontWeight.bold))),
+            const SizedBox(width: 46),
           ]),
-          if (_teamMembers.isNotEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
+          if (_teamMembers.isNotEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 16), child: Divider(color: _borderColor(context))),
 
           ListView.separated(
             shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
             itemCount: _teamMembers.length,
-            separatorBuilder: (_,__) => const Divider(height: 32),
+            separatorBuilder: (_,__) => Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Divider(color: _borderColor(context))),
             itemBuilder: (ctx, i) {
               final m = _teamMembers[i];
               final storeData = m['stores'];
-              // FORMATS THE TEXT AS "EzeeWash Gulshan (Dhaka)"
               final storeDisplay = storeData != null ? '${storeData['name']} (${storeData['city']})' : 'Global / Unassigned';
 
               return Row(children: [
                 CircleAvatar(radius: 22, backgroundColor: AppColors.accent, child: Text(m['email'][0].toUpperCase(), style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
                 const SizedBox(width: 16),
-                Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(m['email'].split('@')[0], style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15)), const SizedBox(height: 2), Text(m['email'], style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext))])),
+                Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(m['email'].split('@')[0], style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: _textColor(context))), const SizedBox(height: 2), Text(m['email'], style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context)))])),
                 Expanded(flex: 2, child: Row(children: [_roleBadge(m['role'] ?? 'Manager')])),
-                // UPDATED TO SHOW STORE AND LOCATION
-                Expanded(flex: 2, child: Row(children: [ Icon(Icons.storefront, size: 16, color: AppColors.subtext), const SizedBox(width: 6), Flexible(child: Text(storeDisplay, style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w600)))])),
-                IconButton(icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 22), onPressed: () async {
-                  await Supabase.instance.client.from('team_members').delete().eq('id', m['id']);
-                  _loadTeamMembers();
-                  _showToast('Member removed from whitelist.', AppColors.info);
-                })
+                Expanded(flex: 2, child: Row(children: [ Icon(Icons.storefront, size: 16, color: _subtextColor(context)), const SizedBox(width: 6), Flexible(child: Text(storeDisplay, style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context), fontWeight: FontWeight.w600)))])),
+                Container(
+                  decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), shape: BoxShape.circle),
+                  child: IconButton(icon: const Icon(Icons.delete_outline, color: AppColors.error, size: 20), onPressed: () async {
+                    await Supabase.instance.client.from('team_members').delete().eq('id', m['id']);
+                    _loadTeamMembers();
+                    _showToast('Member removed from whitelist.', AppColors.info);
+                  }),
+                )
               ]);
             },
           )
@@ -383,7 +405,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Row(children: [
             Expanded(child: _textField('Business Name', _bizNameCtrl)),
             const SizedBox(width: 24),
-            Expanded(child: _textField('GST Number', _bizGstCtrl)),
+            Expanded(child: _textField('GST/Tax Number', _bizGstCtrl)),
           ]),
           const SizedBox(height: 24),
           Row(children: [
@@ -392,7 +414,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Expanded(child: _textField('Contact Number', _bizPhoneCtrl)),
           ]),
           const SizedBox(height: 32),
-          _actionButton('Save Changes', AppColors.primary, () async {
+          _actionButton('Save Business Details', AppColors.primary, Icons.storefront_rounded, () async {
             setState(() => _isSaving = true);
             try {
               await Supabase.instance.client.from('settings').upsert({
@@ -411,13 +433,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _sectionCard({required String title, IconData? icon, Color? iconColor, String? subtitle, Widget? actionWidget, required Widget child}) {
     return Container(
       padding: const EdgeInsets.all(32),
-      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))]),
+      decoration: BoxDecoration(color: _surfaceColor(context), borderRadius: BorderRadius.circular(20), border: Border.all(color: _borderColor(context), width: 1.5), boxShadow: [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.03), blurRadius: 15, offset: const Offset(0, 4))]),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          if (icon != null) ...[Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (iconColor ?? AppColors.text).withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: iconColor ?? AppColors.text, size: 22)), const SizedBox(width: 16)],
+          if (icon != null) ...[Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (iconColor ?? AppColors.primary).withOpacity(0.15), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: iconColor ?? AppColors.primary, size: 24)), const SizedBox(width: 16)],
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)),
-            if (subtitle != null) ...[const SizedBox(height: 4), Text(subtitle, style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext))],
+            Text(title, style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: _textColor(context))),
+            if (subtitle != null) ...[const SizedBox(height: 4), Text(subtitle, style: GoogleFonts.inter(fontSize: 14, color: _subtextColor(context)))],
           ]),
           const Spacer(),
           if (actionWidget != null) actionWidget,
@@ -430,26 +452,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _textField(String label, TextEditingController ctrl, {String? hint, bool obscure = false, bool readOnly = false}) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (label.isNotEmpty) ...[Text(label, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)), const SizedBox(height: 8)],
-      TextFormField(controller: ctrl, obscureText: obscure, readOnly: readOnly, style: GoogleFonts.inter(fontSize: 14, color: readOnly ? AppColors.subtext : AppColors.text), decoration: _inputDeco(hint: hint, readOnly: readOnly)),
+      if (label.isNotEmpty) ...[Text(label, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13, color: _textColor(context))), const SizedBox(height: 8)],
+      TextFormField(controller: ctrl, obscureText: obscure, readOnly: readOnly, style: GoogleFonts.inter(fontSize: 14, color: readOnly ? _subtextColor(context) : _textColor(context)), decoration: _inputDeco(hint: hint, readOnly: readOnly)),
     ]);
   }
 
   InputDecoration _inputDeco({String? hint, bool readOnly = false}) => InputDecoration(
-    hintText: hint, hintStyle: GoogleFonts.inter(color: Colors.grey.shade400, fontSize: 14),
-    filled: true, fillColor: readOnly ? AppColors.background : AppColors.surface,
+    hintText: hint, hintStyle: GoogleFonts.inter(color: _subtextColor(context).withOpacity(0.5), fontSize: 14),
+    filled: true, fillColor: readOnly ? (_isDark(context) ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9)) : _bgColor(context),
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide:  BorderSide(color: AppColors.border)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide:  BorderSide(color: AppColors.border)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: _borderColor(context))),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: _borderColor(context))),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 2.0)),
   );
 
-  Widget _actionButton(String label, Color color, VoidCallback onPressed) {
-    return ElevatedButton(
+  Widget _actionButton(String label, Color color, IconData icon, VoidCallback onPressed) {
+    return ElevatedButton.icon(
       onPressed: _isSaving ? null : onPressed,
-      style: ElevatedButton.styleFrom(backgroundColor: color, elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-      child: _isSaving
-          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+      icon: _isSaving ? const SizedBox.shrink() : Icon(icon, color: Colors.white, size: 20),
+      style: ElevatedButton.styleFrom(backgroundColor: color, elevation: 2, shadowColor: color.withOpacity(0.5), padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      label: _isSaving
+          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
           : Text(label, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
     );
   }
@@ -458,12 +481,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isSuper = role == 'Super Admin';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(color: (isSuper ? AppColors.primary : AppColors.success).withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(color: (isSuper ? AppColors.primary : AppColors.success).withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
       child: Text(role, style: GoogleFonts.inter(fontSize: 11, color: isSuper ? AppColors.primary : AppColors.success, fontWeight: FontWeight.bold)),
     );
   }
 
   void _showToast(String msg, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w500)), backgroundColor: color, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)), backgroundColor: color, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
   }
 }
