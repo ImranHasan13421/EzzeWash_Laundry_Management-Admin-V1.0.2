@@ -92,7 +92,18 @@ class _RidersScreenState extends State<RidersScreen> {
     catch (e) { if (mounted) setState(() { _loading = false; _error = e.toString(); }); }
   }
 
-  Future<void> _toggleActive(String riderId, bool current) async { await supabase.from(AppConstants.ridersTable).update({'is_active': !current}).eq('id', riderId); _loadRidersData(); }
+  Future<void> _toggleActive(String riderId, bool current) async {final newActiveStatus = !current;
+
+  // Create payload
+  final updateData = <String, dynamic>{'is_active': newActiveStatus};
+
+  // CRITICAL: If marking inactive, force offline simultaneously
+  if (newActiveStatus == false) {
+    updateData['is_online'] = false;
+  }
+
+  await supabase.from(AppConstants.ridersTable).update(updateData).eq('id', riderId);
+  _loadRidersData();}
 
   List<Map<String, dynamic>> get _filtered {
     final q = _searchQuery.toLowerCase(); if (q.isEmpty) return _riders;

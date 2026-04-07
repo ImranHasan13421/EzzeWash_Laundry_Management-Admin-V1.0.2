@@ -456,6 +456,10 @@ class _ActionRequiredFeed extends StatelessWidget {
               final urgency = _getUrgencyInfo(o['created_at'], o['status']);
               final uColor = urgency['color'] as Color;
               final isActionable = ['pending', 'confirmed', 'ready'].contains(o['status']);
+              final isManual = o['is_manual'] == true;
+              final manualName = o['manual_customer_name'] as String?;
+              final profileName = (o['profiles'] as Map?)?['full_name'] as String?;
+              final String displayName = isManual ? (manualName ?? 'Manual Customer') : (profileName ?? 'Guest');
 
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -466,7 +470,10 @@ class _ActionRequiredFeed extends StatelessWidget {
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('#${o['order_number']}', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.accent,)),
                     const SizedBox(height: 4),
-                    Text('${o['profiles']['full_name']} • ${o['status'].toString().toUpperCase().replaceAll('_', ' ')}', style: GoogleFonts.inter(fontSize: 13, color: AppColors.text)),
+
+                    // --- FIXED: Replaced o['profiles']['full_name'] with displayName ---
+                    Text('$displayName • ${o['status'].toString().toUpperCase().replaceAll('_', ' ')}', style: GoogleFonts.inter(fontSize: 13, color: AppColors.text)),
+
                   ])),
                   Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     Text(urgency['text'], style: GoogleFonts.inter(color: uColor, fontWeight: FontWeight.bold, fontSize: 13)),
