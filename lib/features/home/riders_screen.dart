@@ -107,6 +107,11 @@ class _RidersScreenState extends State<RidersScreen> {
     showDialog(context: context, builder: (_) => _RiderCashHistoryDialog(riderId: riderId, riderName: riderName));
   }
 
+  // --- NEW: Calculate Payout Dialog ---
+  void _showCalculatePayoutDialog(String riderId, String riderName) {
+    showDialog(context: context, builder: (_) => _RiderPayoutDialog(riderId: riderId, riderName: riderName));
+  }
+
   @override Widget build(BuildContext context) {
     final online = _riders.where((r) => r['is_online'] == true).length; final active = _riders.where((r) => r['is_active'] == true).length;
 
@@ -153,6 +158,7 @@ class _RidersScreenState extends State<RidersScreen> {
                 onCollectCash: () => _showCollectCashDialog(rId, rName, _todayCashMap[rId] ?? 0.0, (r['cash_in_hand'] as num?)?.toDouble() ?? 0.0),
                 onOrderHistory: () => _showOrderHistoryDialog(rId, rName),
                 onCashHistory: () => _showCashHistoryDialog(rId, rName),
+                onCalculatePayout: () => _showCalculatePayoutDialog(rId, rName), // NEW
               );
             })),
           ]),
@@ -172,8 +178,9 @@ class _RiderCard extends StatelessWidget {
   final Future<void> Function(String, bool) onToggleActive;
   final VoidCallback onEdit; final VoidCallback onCollectCash;
   final VoidCallback onOrderHistory; final VoidCallback onCashHistory;
+  final VoidCallback onCalculatePayout;
 
-  const _RiderCard({required this.rider, required this.isSuperAdmin, required this.todayCash, required this.onToggleActive, required this.onEdit, required this.onCollectCash, required this.onOrderHistory, required this.onCashHistory});
+  const _RiderCard({required this.rider, required this.isSuperAdmin, required this.todayCash, required this.onToggleActive, required this.onEdit, required this.onCollectCash, required this.onOrderHistory, required this.onCashHistory, required this.onCalculatePayout});
 
   String _vehicleEmoji(String t) { switch (t) { case 'motorcycle': return '🏍️'; case 'bicycle': return '🚲'; case 'van': return '🚐'; default: return '🚗'; } }
 
@@ -206,7 +213,6 @@ class _RiderCard extends StatelessWidget {
           ]),
           const SizedBox(height: 24),
 
-          // Enhanced Cash & Actions Row
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border.withOpacity(0.6))),
@@ -238,7 +244,10 @@ class _RiderCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Row(
+          // --- UPDATED ACTIONS ROW ---
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
             children: [
               OutlinedButton.icon(
                   onPressed: onOrderHistory,
@@ -246,12 +255,17 @@ class _RiderCard extends StatelessWidget {
                   label: Text('Order History', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
                   style: OutlinedButton.styleFrom(foregroundColor: AppColors.primary, side: BorderSide(color: AppColors.primary.withOpacity(0.3)), backgroundColor: AppColors.primary.withOpacity(0.04), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0)
               ),
-              const SizedBox(width: 12),
               OutlinedButton.icon(
                   onPressed: onCashHistory,
                   icon: const Icon(Icons.history_rounded, size: 16),
                   label: Text('Cash Logs', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
                   style: OutlinedButton.styleFrom(foregroundColor: AppColors.text, side: BorderSide(color: AppColors.border), backgroundColor: AppColors.surface, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0)
+              ),
+              OutlinedButton.icon(
+                  onPressed: onCalculatePayout,
+                  icon: const Icon(Icons.calculate_rounded, size: 16),
+                  label: Text('Calculate Payout', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF8B5CF6), side: const BorderSide(color: Color(0xFF8B5CF6)), backgroundColor: const Color(0xFF8B5CF6).withOpacity(0.05), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), elevation: 0)
               ),
             ],
           )
@@ -260,6 +274,139 @@ class _RiderCard extends StatelessWidget {
     );
   }
   Widget _chip(String label, Color color) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(label, style: GoogleFonts.inter(fontSize: 10, color: color, fontWeight: FontWeight.bold)));
+}
+
+// ─── NEW: PAYOUT CALCULATOR DIALOG ──────────────────────────────────────────
+class _RiderPayoutDialog extends StatefulWidget {
+  final String riderId, riderName;
+  const _RiderPayoutDialog({required this.riderId, required this.riderName});
+  @override State<_RiderPayoutDialog> createState() => _RiderPayoutDialogState();
+}
+
+class _RiderPayoutDialogState extends State<_RiderPayoutDialog> {
+  String _period = 'This Month';
+  final _baseRateCtrl = TextEditingController(text: '40');
+  final _batchRateCtrl = TextEditingController(text: '10');
+
+  bool _loading = false;
+  int _anchorTrips = 0;
+  int _batchedTrips = 0;
+
+  @override void initState() { super.initState(); _calculatePayout(); }
+
+  Future<void> _calculatePayout() async {
+    setState(() => _loading = true);
+
+    DateTime now = DateTime.now();
+    DateTime start, end;
+    if (_period == 'Today') {
+      start = DateTime(now.year, now.month, now.day);
+      end = DateTime(now.year, now.month, now.day, 23, 59, 59);
+    } else if (_period == 'This Week') {
+      start = now.subtract(Duration(days: now.weekday - 1));
+      start = DateTime(start.year, start.month, start.day);
+      end = start.add(const Duration(days: 6, hours: 23, minutes: 59, seconds: 59));
+    } else if (_period == 'This Month') {
+      start = DateTime(now.year, now.month, 1);
+      end = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+    } else { // Last Month
+      start = DateTime(now.year, now.month - 1, 1);
+      end = DateTime(now.year, now.month, 0, 23, 59, 59);
+    }
+
+    try {
+      final res = await supabase.from(AppConstants.ordersTable)
+          .select('id, updated_at, status, pickup_rider_id, delivery_rider_id, profiles(full_name)')
+          .gte('updated_at', start.toUtc().toIso8601String())
+          .lte('updated_at', end.toUtc().toIso8601String())
+          .or('pickup_rider_id.eq.${widget.riderId},delivery_rider_id.eq.${widget.riderId}');
+
+      Map<String, int> pickupGroups = {};
+      Map<String, int> deliveryGroups = {};
+      int totalP = 0;
+      int totalD = 0;
+
+      for (var o in res) {
+        String status = o['status'] ?? '';
+        if (status == 'cancelled') continue;
+
+        String dateStr = o['updated_at'] != null ? o['updated_at'].toString().substring(0, 10) : '';
+        String customerName = (o['profiles'] as Map?)?['full_name']?.toString() ?? o['id'].toString();
+        String key = '${dateStr}_$customerName';
+
+        if (o['pickup_rider_id'] == widget.riderId) {
+          totalP++;
+          pickupGroups[key] = (pickupGroups[key] ?? 0) + 1;
+        }
+        if (o['delivery_rider_id'] == widget.riderId && status == 'delivered') {
+          totalD++;
+          deliveryGroups[key] = (deliveryGroups[key] ?? 0) + 1;
+        }
+      }
+
+      int anchors = pickupGroups.length + deliveryGroups.length;
+      int batched = (totalP - pickupGroups.length) + (totalD - deliveryGroups.length);
+
+      if (mounted) setState(() { _anchorTrips = anchors; _batchedTrips = batched; _loading = false; });
+    } catch (e) {
+      debugPrint("Payout Calc Error: $e");
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override Widget build(BuildContext context) {
+    double baseRate = double.tryParse(_baseRateCtrl.text) ?? 0;
+    double batchRate = double.tryParse(_batchRateCtrl.text) ?? 0;
+    double totalEarned = (_anchorTrips * baseRate) + (_batchedTrips * batchRate);
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 550), child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFF8B5CF6).withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.calculate_rounded, color: Color(0xFF8B5CF6), size: 24)), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Earnings Calculator', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)), Text(widget.riderName, style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500))])), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
+        const SizedBox(height: 24), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 24),
+
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Time Period', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12, color: AppColors.text)), const SizedBox(height: 8),
+            Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)), child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _period, isExpanded: true, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: ['Today', 'This Week', 'This Month', 'Last Month'].map((s) => DropdownMenuItem(value: s, child: Text(s, style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) { setState(() => _period = v!); _calculatePayout(); })))
+          ])),
+          const SizedBox(width: 16),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Base Rate (৳)', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12, color: AppColors.text)), const SizedBox(height: 8),
+            TextFormField(controller: _baseRateCtrl, keyboardType: TextInputType.number, onChanged: (_) => setState((){}), decoration: InputDecoration(filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5))))
+          ])),
+          const SizedBox(width: 16),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Batch Bonus (৳)', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 12, color: AppColors.text)), const SizedBox(height: 8),
+            TextFormField(controller: _batchRateCtrl, keyboardType: TextInputType.number, onChanged: (_) => setState((){}), decoration: InputDecoration(filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5))))
+          ])),
+        ]),
+
+        const SizedBox(height: 24),
+
+        _loading ? const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator())) :
+        Container(
+          padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: const Color(0xFF8B5CF6).withOpacity(0.05), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.2))),
+          child: Column(children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Base Legs (Anchor)', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
+              Text('$_anchorTrips × ৳${baseRate.toStringAsFixed(0)}', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.text)),
+            ]),
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Batched Extras (Same Address)', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
+              Text('$_batchedTrips × ৳${batchRate.toStringAsFixed(0)}', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.text)),
+            ]),
+            const SizedBox(height: 16), Divider(height: 1, color: AppColors.border), const SizedBox(height: 16),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Total Salary Payout', style: GoogleFonts.outfit(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.text)),
+              Text('৳${totalEarned.toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 28, fontWeight: FontWeight.bold, color: const Color(0xFF8B5CF6))),
+            ]),
+          ]),
+        ),
+      ]))),
+    );
+  }
 }
 
 // ─── ORDER HISTORY DIALOG ────────────────────────────────────────────────
@@ -532,7 +679,7 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
   bool _loading = false; String _selectedVehicle = 'motorcycle'; final List<String> _vehicleTypes = ['motorcycle', 'bicycle', 'car', 'van'];
   Uint8List? _avatarBytes; String? _existingAvatarUrl;
 
-  bool _obscurePassword = true; // --- NEW: Toggle State ---
+  bool _obscurePassword = true;
 
   @override void initState() {
     super.initState();
@@ -590,7 +737,6 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
     setState(() => _loading = false);
   }
 
-  // --- NEW: Added suffixIcon parameter to helper function ---
   InputDecoration _deco(String hint, {Widget? suffixIcon}) => InputDecoration(hintText: hint, hintStyle: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14), filled: true, fillColor: AppColors.background, contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide:  BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)), errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.error)), suffixIcon: suffixIcon);
   Widget _label(String text) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(text, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)));
 
@@ -612,10 +758,9 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
             _label('Assign Password *'),
             TextFormField(
                 controller: _passwordCtrl,
-                obscureText: _obscurePassword, // --- NEW: Controlled visibility ---
+                obscureText: _obscurePassword,
                 decoration: _deco(
                     'Create password',
-                    // --- NEW: Eye Icon Button ---
                     suffixIcon: IconButton(
                       icon: Icon(_obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded, color: AppColors.subtext, size: 20),
                       onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
