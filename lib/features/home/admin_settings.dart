@@ -46,6 +46,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _teamMembers = [];
   List<Map<String, dynamic>> _storesList = [];
   List<Map<String, dynamic>> _servicesList = [];
+  List<Map<String, dynamic>> _customersList = [];
+  String _customerSearchQuery = '';
+
   User? currentUser;
   String _joinedDate = 'Unknown';
 
@@ -72,9 +75,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     await Future.wait([
       _loadBusinessSettings(),
-      if (widget.isSuperAdmin) _loadStores(), // Fetches stores for dropdowns & the Stores tab
+      if (widget.isSuperAdmin) _loadStores(),
       if (widget.isSuperAdmin) _loadTeamMembers(),
       if (widget.isSuperAdmin) _loadServices(),
+      if (widget.isSuperAdmin) _loadCustomers(),
     ]);
 
     if (mounted) setState(() => _loading = false);
@@ -89,40 +93,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _bizAddrCtrl.text = data['business_address'] ?? '';
         _bizPhoneCtrl.text = data['contact_number'] ?? '';
       }
-    } catch (e) {
-      debugPrint('Error loading business settings: $e');
-    }
+    } catch (e) { debugPrint('Error loading business settings: $e'); }
   }
 
   Future<void> _loadStores() async {
     try {
       final data = await Supabase.instance.client.from('stores').select().order('created_at', ascending: false);
-      if (mounted) {
-        setState(() {
-          _storesList = List<Map<String, dynamic>>.from(data);
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading stores: $e');
-    }
+      if (mounted) setState(() => _storesList = List<Map<String, dynamic>>.from(data));
+    } catch (e) { debugPrint('Error loading stores: $e'); }
   }
 
   Future<void> _loadTeamMembers() async {
     try {
       final data = await Supabase.instance.client.from('team_members').select('*, stores(name, city)').order('created_at');
       if (mounted) setState(() => _teamMembers = List<Map<String, dynamic>>.from(data));
-    } catch (e) {
-      debugPrint('Error loading team: $e');
-    }
+    } catch (e) { debugPrint('Error loading team: $e'); }
   }
 
   Future<void> _loadServices() async {
     try {
       final data = await Supabase.instance.client.from('services').select().order('created_at', ascending: false);
       if (mounted) setState(() => _servicesList = List<Map<String, dynamic>>.from(data));
-    } catch (e) {
-      debugPrint('Error loading services: $e');
-    }
+    } catch (e) { debugPrint('Error loading services: $e'); }
+  }
+
+  Future<void> _loadCustomers() async {
+    try {
+      final data = await Supabase.instance.client.from('profiles').select().order('created_at', ascending: false);
+      if (mounted) setState(() => _customersList = List<Map<String, dynamic>>.from(data));
+    } catch (e) { debugPrint('Error loading customers: $e'); }
   }
 
   Future<void> _toggleServiceStatus(Map<String, dynamic> service) async {
@@ -132,9 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await Supabase.instance.client.from('services').update({'is_active': newStatus}).eq('id', service['id']);
       _loadServices();
       _showToast(newStatus ? '${service['title']} is now Available' : '${service['title']} is now Unavailable', newStatus ? AppColors.success : AppColors.warning);
-    } catch (e) {
-      _showToast('Error updating status: $e', AppColors.error);
-    }
+    } catch (e) { _showToast('Error updating status: $e', AppColors.error); }
   }
 
   Future<void> _toggleStoreStatus(Map<String, dynamic> store) async {
@@ -144,9 +141,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await Supabase.instance.client.from('stores').update({'is_active': newStatus}).eq('id', store['id']);
       _loadStores();
       _showToast(newStatus ? '${store['name']} is now Open' : '${store['name']} is now Closed', newStatus ? AppColors.success : AppColors.warning);
-    } catch (e) {
-      _showToast('Error updating store status: $e', AppColors.error);
-    }
+    } catch (e) { _showToast('Error updating store status: $e', AppColors.error); }
   }
 
   @override
@@ -155,6 +150,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       {'id': 'profile', 'name': 'Profile', 'icon': Icons.person_outline},
       {'id': 'security', 'name': 'Security', 'icon': Icons.shield_outlined},
       if (widget.isSuperAdmin) {'id': 'team', 'name': 'Team', 'icon': Icons.people_outline},
+      if (widget.isSuperAdmin) {'id': 'customers', 'name': 'Customers', 'icon': Icons.manage_accounts_outlined},
       if (widget.isSuperAdmin) {'id': 'stores', 'name': 'Stores', 'icon': Icons.store_mall_directory_outlined},
       if (widget.isSuperAdmin) {'id': 'services', 'name': 'Services', 'icon': Icons.dry_cleaning_outlined},
       if (widget.isSuperAdmin) {'id': 'business', 'name': 'Business', 'icon': Icons.business_center_outlined},
@@ -186,38 +182,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFE2E8F0).withOpacity(0.7), borderRadius: BorderRadius.circular(14)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: List.generate(tabs.length, (i) {
-                  final sel = _tab == i;
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() { _tab = i; _isInviting = false; });
-                      if (tabs[i]['id'] == 'team') _loadTeamMembers();
-                      if (tabs[i]['id'] == 'stores') _loadStores();
-                      if (tabs[i]['id'] == 'services') _loadServices();
-                      if (tabs[i]['id'] == 'business') _loadBusinessSettings();
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      decoration: BoxDecoration(
-                          color: sel ? _surfaceColor(context) : Colors.transparent,
-                          borderRadius: BorderRadius.circular(10),
-                          boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.05), blurRadius: 8, offset: const Offset(0, 2))] : []
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: List.generate(tabs.length, (i) {
+                    final sel = _tab == i;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() { _tab = i; _isInviting = false; });
+                        if (tabs[i]['id'] == 'team') _loadTeamMembers();
+                        if (tabs[i]['id'] == 'customers') _loadCustomers();
+                        if (tabs[i]['id'] == 'stores') _loadStores();
+                        if (tabs[i]['id'] == 'services') _loadServices();
+                        if (tabs[i]['id'] == 'business') _loadBusinessSettings();
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        decoration: BoxDecoration(
+                            color: sel ? _surfaceColor(context) : Colors.transparent,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.05), blurRadius: 8, offset: const Offset(0, 2))] : []
+                        ),
+                        child: Row(children: [
+                          Icon(tabs[i]['icon'] as IconData, size: 18, color: sel ? AppColors.primary : _subtextColor(context)),
+                          const SizedBox(width: 8),
+                          Text(tabs[i]['name'] as String, style: GoogleFonts.inter(color: sel ? _textColor(context) : _subtextColor(context), fontWeight: sel ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
+                        ]),
                       ),
-                      child: Row(children: [
-                        Icon(tabs[i]['icon'] as IconData, size: 18, color: sel ? AppColors.primary : _subtextColor(context)),
-                        const SizedBox(width: 8),
-                        Text(tabs[i]['name'] as String, style: GoogleFonts.inter(color: sel ? _textColor(context) : _subtextColor(context), fontWeight: sel ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
-                      ]),
-                    ),
-                  );
-                })),
+                    );
+                  })),
+                ),
               ),
               const SizedBox(height: 32),
 
               if (tabs[_tab]['id'] == 'profile') _profileTab(),
               if (tabs[_tab]['id'] == 'security') _securityTab(),
               if (tabs[_tab]['id'] == 'team') _teamTab(),
+              if (tabs[_tab]['id'] == 'customers') _customersTab(),
               if (tabs[_tab]['id'] == 'stores') _storesTab(),
               if (tabs[_tab]['id'] == 'services') _servicesTab(),
               if (tabs[_tab]['id'] == 'business') _businessTab(),
@@ -339,6 +340,206 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ])
     );
   }
+
+  // ─── CUSTOMERS TAB (View Only) ────────────────────────────────────────────────
+  Widget _customersTab() {
+    final filteredCustomers = _customersList.where((c) {
+      if (_customerSearchQuery.isEmpty) return true;
+      final q = _customerSearchQuery.toLowerCase();
+      final name = (c['full_name'] ?? '').toString().toLowerCase();
+      final phone = (c['phone'] ?? '').toString().toLowerCase();
+      return name.contains(q) || phone.contains(q);
+    }).toList();
+
+    return _sectionCard(
+      title: 'Customer Directory',
+      subtitle: '${_customersList.length} registered users',
+      icon: Icons.manage_accounts_outlined,
+      iconColor: const Color(0xFFF59E0B),
+      actionWidget: SizedBox(
+        width: 300,
+        child: TextField(
+          onChanged: (v) => setState(() => _customerSearchQuery = v),
+          style: GoogleFonts.inter(fontSize: 14, color: _textColor(context)),
+          decoration: InputDecoration(
+            hintText: 'Search by name or phone...',
+            hintStyle: GoogleFonts.inter(color: _subtextColor(context).withOpacity(0.7), fontSize: 13),
+            prefixIcon: Icon(Icons.search_rounded, color: _subtextColor(context), size: 18),
+            filled: true, fillColor: _isDark(context) ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _borderColor(context))),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _borderColor(context))),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)),
+          ),
+        ),
+      ),
+      child: filteredCustomers.isEmpty
+          ? Padding(
+        padding: const EdgeInsets.all(40),
+        child: Center(child: Text('No customers found.', style: GoogleFonts.inter(color: _subtextColor(context), fontSize: 15))),
+      )
+          : ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: filteredCustomers.length,
+        separatorBuilder: (_, __) => Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Divider(color: _borderColor(context))),
+        itemBuilder: (ctx, i) {
+          final c = filteredCustomers[i];
+          final name = c['full_name'] ?? 'Unknown User';
+          final phone = c['phone'] ?? 'No phone';
+
+          String dateStr = 'Unknown';
+          if (c['created_at'] != null) {
+            final d = DateTime.parse(c['created_at']).toLocal();
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            dateStr = '${d.day} ${months[d.month-1]} ${d.year}';
+          }
+
+          return Row(
+            children: [
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: AppColors.primary.withOpacity(0.1),
+                child: Text(
+                  name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                  style: GoogleFonts.outfit(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: _textColor(context))),
+                    const SizedBox(height: 2),
+                    Text(phone, style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context))),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Joined', style: GoogleFonts.inter(fontSize: 11, color: _subtextColor(context))),
+                    const SizedBox(height: 2),
+                    Text(dateStr, style: GoogleFonts.inter(fontSize: 13, color: _textColor(context), fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _showCustomerOrderHistory(c),
+                icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                label: Text('View Orders', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: BorderSide(color: AppColors.primary.withOpacity(0.3)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // --- CUSTOMER ORDER HISTORY DIALOG ---
+  void _showCustomerOrderHistory(Map<String, dynamic> customer) async {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => FutureBuilder(
+        future: Supabase.instance.client
+            .from('orders')
+            .select('id, order_number, total_price, status, created_at')
+            .eq('user_id', customer['id'])
+            .order('created_at', ascending: false),
+        builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
+          return AlertDialog(
+            backgroundColor: _surfaceColor(context),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: _borderColor(context))),
+            title: Row(
+              children: [
+                Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.history_rounded, color: AppColors.primary, size: 20)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Order History', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: _textColor(context))),
+                      Text(customer['full_name'] ?? 'User', style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context))),
+                    ],
+                  ),
+                ),
+                IconButton(onPressed: () => Navigator.pop(dialogCtx), icon: Icon(Icons.close_rounded, color: _subtextColor(context))),
+              ],
+            ),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: snapshot.connectionState == ConnectionState.waiting
+                  ? const Center(child: CircularProgressIndicator())
+                  : snapshot.hasError
+                  ? Center(child: Text('Error loading orders', style: GoogleFonts.inter(color: AppColors.error)))
+                  : (!snapshot.hasData || snapshot.data!.isEmpty)
+                  ? Center(child: Text('No orders found for this customer.', style: GoogleFonts.inter(color: _subtextColor(context))))
+                  : ListView.separated(
+                physics: const BouncingScrollPhysics(),
+                itemCount: snapshot.data!.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (ctx, i) {
+                  final o = snapshot.data![i];
+                  String dateStr = '';
+                  if (o['created_at'] != null) {
+                    final d = DateTime.parse(o['created_at']).toLocal();
+                    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                    dateStr = '${d.day} ${months[d.month-1]} ${d.year}';
+                  }
+
+                  Color statusColor = AppColors.primary;
+                  if (o['status'] == 'delivered') statusColor = AppColors.success;
+                  else if (o['status'] == 'cancelled') statusColor = AppColors.error;
+
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(12), border: Border.all(color: _borderColor(context))),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('#${o['order_number']}', style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: _textColor(context))),
+                            const SizedBox(height: 4),
+                            Text(dateStr, style: GoogleFonts.inter(fontSize: 12, color: _subtextColor(context))),
+                          ],
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text('৳${((o['total_price'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}', style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: _textColor(context))),
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: ShapeDecoration(shape: const StadiumBorder(), color: statusColor.withOpacity(0.1)),
+                              child: Text((o['status'] ?? 'pending').toString().toUpperCase(), style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: statusColor)),
+                            )
+                          ],
+                        )
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   Widget _teamTab() {
     return _sectionCard(
