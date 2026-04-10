@@ -24,7 +24,10 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  int _tab = 0;
+  // UI State for dynamic expanding sections
+  String? _expandedGroup; // 'admin', 'business', or null
+  int? _tab; // null when no specific sub-tab is clicked yet
+
   bool _loading = false;
   bool _isSaving = false;
   bool _isInviting = false;
@@ -169,24 +172,143 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) { _showToast('Error updating promo: $e', AppColors.error); }
   }
 
+  // --- UI COMPONENTS ---
+
+  Widget _buildCategoryCard(String title, IconData icon, String groupId, String subtitle) {
+    final isExpanded = _expandedGroup == groupId;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            if (_expandedGroup == groupId) {
+              _expandedGroup = null; // Collapse
+              _tab = null; // Hide page content
+            } else {
+              _expandedGroup = groupId; // Expand newly selected
+              _tab = null; // Hide page content until a specific sub-tab is clicked
+            }
+          });
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: isExpanded ? const Color(0xFF4F46E5).withOpacity(0.04) : _surfaceColor(context),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: isExpanded ? const Color(0xFF4F46E5).withOpacity(0.6) : _borderColor(context),
+                width: isExpanded ? 2 : 1
+            ),
+            boxShadow: isExpanded ? [] : [BoxShadow(color: Colors.black.withOpacity(_isDark(context)? 0.2 : 0.03), blurRadius: 15, offset: const Offset(0, 4))],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: isExpanded ? const Color(0xFF4F46E5) : (_isDark(context) ? const Color(0xFF334155) : const Color(0xFFF1F5F9)),
+                    shape: BoxShape.circle
+                ),
+                child: Icon(icon, color: isExpanded ? Colors.white : _subtextColor(context), size: 30),
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: isExpanded ? const Color(0xFF4F46E5) : _textColor(context))),
+                    const SizedBox(height: 6),
+                    Text(subtitle, style: GoogleFonts.inter(fontSize: 14, color: _subtextColor(context))),
+                  ],
+                ),
+              ),
+              Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: isExpanded ? const Color(0xFF4F46E5).withOpacity(0.1) : Colors.transparent, shape: BoxShape.circle),
+                  child: Icon(isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded, color: isExpanded ? const Color(0xFF4F46E5) : _subtextColor(context), size: 28)
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final tabs = [
+    // Define all available tabs
+    final List<Map<String, dynamic>> tabs = [
       {'id': 'profile', 'name': 'Profile', 'icon': Icons.person_outline},
       {'id': 'security', 'name': 'Security', 'icon': Icons.shield_outlined},
       if (widget.isSuperAdmin) {'id': 'team', 'name': 'Team', 'icon': Icons.people_outline},
+      if (widget.isSuperAdmin) {'id': 'business', 'name': 'Business', 'icon': Icons.business_center_outlined},
+
       if (widget.isSuperAdmin) {'id': 'customers', 'name': 'Customers', 'icon': Icons.manage_accounts_outlined},
       if (widget.isSuperAdmin) {'id': 'promos', 'name': 'Promos', 'icon': Icons.campaign_outlined},
       if (widget.isSuperAdmin) {'id': 'stores', 'name': 'Stores', 'icon': Icons.store_mall_directory_outlined},
       if (widget.isSuperAdmin) {'id': 'services', 'name': 'Services', 'icon': Icons.dry_cleaning_outlined},
-      if (widget.isSuperAdmin) {'id': 'business', 'name': 'Business', 'icon': Icons.business_center_outlined},
     ];
 
-    if (_tab >= tabs.length) _tab = 0;
+    if (_tab != null && _tab! >= tabs.length) _tab = null;
+
+    // Define Groupings
+    final adminTabIds = ['profile', 'security', 'team', 'business'];
+    final bizTabIds = ['customers', 'promos', 'stores', 'services'];
+
+    final adminTabs = tabs.where((t) => adminTabIds.contains(t['id'])).toList();
+    final bizTabs = tabs.where((t) => bizTabIds.contains(t['id'])).toList();
+
+    // Reusable builder for the animated sub-tabs row
+    Widget buildTabRow(List<Map<String, dynamic>> tabGroup) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFE2E8F0).withOpacity(0.7), borderRadius: BorderRadius.circular(16)),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: tabGroup.map((t) {
+                  final realIndex = tabs.indexOf(t);
+                  final sel = _tab == realIndex;
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() { _tab = realIndex; _isInviting = false; });
+                      if (t['id'] == 'team') _loadTeamMembers();
+                      if (t['id'] == 'customers') _loadCustomers();
+                      if (t['id'] == 'promos') _loadPromos();
+                      if (t['id'] == 'stores') _loadStores();
+                      if (t['id'] == 'services') _loadServices();
+                      if (t['id'] == 'business') _loadBusinessSettings();
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      decoration: BoxDecoration(
+                          color: sel ? _surfaceColor(context) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.05), blurRadius: 8, offset: const Offset(0, 2))] : []
+                      ),
+                      child: Row(children: [
+                        Icon(t['icon'] as IconData, size: 18, color: sel ? AppColors.primary : _subtextColor(context)),
+                        const SizedBox(width: 8),
+                        Text(t['name'] as String, style: GoogleFonts.inter(color: sel ? _textColor(context) : _subtextColor(context), fontWeight: sel ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
+                      ]),
+                    ),
+                  );
+                }).toList()
+            ),
+          ),
+        ),
+      );
+    }
 
     return Container(
       color: _bgColor(context),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Static Top Header
         Container(
           height: 72, padding: const EdgeInsets.symmetric(horizontal: 32),
           decoration: BoxDecoration(color: _surfaceColor(context), border: Border(bottom: BorderSide(color: _borderColor(context), width: 1.5))),
@@ -198,58 +320,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
 
+        // Scrollable Body Content
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
               : SingleChildScrollView(
             padding: const EdgeInsets.all(32),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(color: _isDark(context) ? const Color(0xFF334155).withOpacity(0.5) : const Color(0xFFE2E8F0).withOpacity(0.7), borderRadius: BorderRadius.circular(14)),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(mainAxisSize: MainAxisSize.min, children: List.generate(tabs.length, (i) {
-                    final sel = _tab == i;
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() { _tab = i; _isInviting = false; });
-                        if (tabs[i]['id'] == 'team') _loadTeamMembers();
-                        if (tabs[i]['id'] == 'customers') _loadCustomers();
-                        if (tabs[i]['id'] == 'promos') _loadPromos();
-                        if (tabs[i]['id'] == 'stores') _loadStores();
-                        if (tabs[i]['id'] == 'services') _loadServices();
-                        if (tabs[i]['id'] == 'business') _loadBusinessSettings();
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        decoration: BoxDecoration(
-                            color: sel ? _surfaceColor(context) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            boxShadow: sel ? [BoxShadow(color: Colors.black.withOpacity(_isDark(context) ? 0.2 : 0.05), blurRadius: 8, offset: const Offset(0, 2))] : []
-                        ),
-                        child: Row(children: [
-                          Icon(tabs[i]['icon'] as IconData, size: 18, color: sel ? AppColors.primary : _subtextColor(context)),
-                          const SizedBox(width: 8),
-                          Text(tabs[i]['name'] as String, style: GoogleFonts.inter(color: sel ? _textColor(context) : _subtextColor(context), fontWeight: sel ? FontWeight.bold : FontWeight.w600, fontSize: 14)),
-                        ]),
-                      ),
-                    );
-                  })),
-                ),
-              ),
-              const SizedBox(height: 32),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
 
-              if (tabs[_tab]['id'] == 'profile') _profileTab(),
-              if (tabs[_tab]['id'] == 'security') _securityTab(),
-              if (tabs[_tab]['id'] == 'team') _teamTab(),
-              if (tabs[_tab]['id'] == 'customers') _customersTab(),
-              if (tabs[_tab]['id'] == 'promos') _promosTab(),
-              if (tabs[_tab]['id'] == 'stores') _storesTab(),
-              if (tabs[_tab]['id'] == 'services') _servicesTab(),
-              if (tabs[_tab]['id'] == 'business') _businessTab(),
-            ]),
+                  // 1. MAIN CARDS SECTION
+                  Row(
+                      children: [
+                        Expanded(
+                            child: _buildCategoryCard('Administration Settings', Icons.admin_panel_settings_outlined, 'admin', 'Manage profile, security, team & core business details')
+                        ),
+                        if (widget.isSuperAdmin) const SizedBox(width: 24),
+                        if (widget.isSuperAdmin) Expanded(
+                            child: _buildCategoryCard('Business Settings', Icons.storefront_outlined, 'business', 'Manage customers, active promos, stores & laundry services')
+                        ),
+                      ]
+                  ),
+
+                  // 2. ANIMATED SUB-TABS ROW (Only appears when a card is clicked)
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                    alignment: Alignment.topCenter,
+                    child: _expandedGroup != null
+                        ? Column(
+                        children: [
+                          const SizedBox(height: 32),
+                          buildTabRow(_expandedGroup == 'admin' ? adminTabs : bizTabs),
+                        ]
+                    )
+                        : const SizedBox(width: double.infinity, height: 0),
+                  ),
+
+                  // 3. ACTUAL TAB CONTENT (Beautifully animated when a specific sub-tab is clicked)
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 400),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (Widget child, Animation<double> animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0.0, 0.05), // Subtle slide up from bottom
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: _tab != null
+                        ? Container(
+                      key: ValueKey<int>(_tab!),
+                      margin: const EdgeInsets.only(top: 32),
+                      child: Builder(builder: (context) {
+                        final id = tabs[_tab!]['id'];
+                        if (id == 'profile') return _profileTab();
+                        if (id == 'security') return _securityTab();
+                        if (id == 'team') return _teamTab();
+                        if (id == 'business') return _businessTab();
+                        if (id == 'customers') return _customersTab();
+                        if (id == 'promos') return _promosTab();
+                        if (id == 'stores') return _storesTab();
+                        if (id == 'services') return _servicesTab();
+                        return const SizedBox.shrink();
+                      }),
+                    )
+                        : const SizedBox.shrink(key: ValueKey<String>('empty_tab')),
+                  ),
+                ]
+            ),
           ),
         ),
       ]),
@@ -993,7 +1139,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: const Icon(Icons.add, color: Colors.white, size: 18),
           label: Text('Add Service', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
           style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4F46E5), // Indigo matching screenshot
+              backgroundColor: const Color(0xFF4F46E5),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
           ),
@@ -1173,7 +1319,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final tag1Ctrl = TextEditingController(text: (isEdit && service['tags'] != null && (service['tags'] as List).isNotEmpty) ? service['tags'][0] : '');
     final tag2Ctrl = TextEditingController(text: (isEdit && service['tags'] != null && (service['tags'] as List).length > 1) ? service['tags'][1] : '');
 
-    String duration = isEdit ? (service['duration'] ?? '12-24 hours') : '12-24 hours';
+    // Safely construct dynamic duration options to avoid Flutter assertion errors
+    List<String> durationOptions = ['12-24 hours', '24-48 hours', '48-72 hours'];
+    String duration = isEdit ? (service['duration']?.toString() ?? '12-24 hours') : '12-24 hours';
+    if (!durationOptions.contains(duration)) {
+      durationOptions.add(duration);
+    }
+
     Uint8List? imgBytes; String? ext; bool sub = false;
 
     showDialog(
@@ -1249,7 +1401,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                               value: duration,
                                               decoration: _inputDeco(),
                                               dropdownColor: _surfaceColor(context),
-                                              items: ['12-24 hours', '24-48 hours', '48-72 hours'].map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.inter(fontSize: 14, color: _textColor(context))))).toList(),
+                                              items: durationOptions.map((e) => DropdownMenuItem(value: e, child: Text(e, style: GoogleFonts.inter(fontSize: 14, color: _textColor(context))))).toList(),
                                               onChanged: (v) => setD(() => duration = v!),
                                             ),
                                           ]
