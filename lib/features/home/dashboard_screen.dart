@@ -57,7 +57,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Future<void> _initRoleAndPages() async {
     final email = supabase.auth.currentUser?.email;
 
-    if (email == 'abdulaowalasif2001@gmail.com') {
+    if (email == 'imranhasan13421@gmail.com') {
       _isSuperAdmin = true;
     } else {
       try {
