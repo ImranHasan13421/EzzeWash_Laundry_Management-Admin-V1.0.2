@@ -13,7 +13,7 @@ class AppConstants {
   static const storesTable         = 'stores';
   static const orderTimelinesTable = 'order_timelines';
 
-  // Admin role — set this in user_metadata when creating admin accounts
+ 
   static const adminRole = 'admin';
 
   // Order statuses
