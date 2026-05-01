@@ -1,6 +1,6 @@
 // lib/core/theme/color/app_colors.dart
 import 'package:flutter/material.dart';
-import '../../../main.dart'; // REQUIRED to see darkModeNotifier
+import '../../../main.dart';
 
 class AppColors {
   AppColors._();
@@ -17,7 +17,7 @@ class AppColors {
     begin: Alignment.topLeft, end: Alignment.bottomRight,
   );
 
-  // --- DYNAMIC GETTERS (Switch instantly) ---
+  // --- DYNAMIC GETTERS ---
   static Color get background => _isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
   static Color get surface    => _isDark ? const Color(0xFF1E293B) : Colors.white;
   static Color get border     => _isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
