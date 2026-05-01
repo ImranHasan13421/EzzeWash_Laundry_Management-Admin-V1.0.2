@@ -4,7 +4,6 @@ import '../models/order_model.dart';
 class SupabaseService {
   static final _client = Supabase.instance.client;
 
-  // ─── AUTH ───────────────────────────────────────────────────────────────
   static Future<AuthResponse> signIn(String email, String password) async {
     return await _client.auth.signInWithPassword(email: email, password: password);
   }
