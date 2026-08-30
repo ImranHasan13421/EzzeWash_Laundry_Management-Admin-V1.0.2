@@ -14,7 +14,8 @@ import '../../main.dart';
 
 class RidersScreen extends StatefulWidget {
   final bool isSuperAdmin;
-  const RidersScreen({super.key, required this.isSuperAdmin});
+  final String? managerStoreId;
+  const RidersScreen({super.key, required this.isSuperAdmin, this.managerStoreId});
 
   @override State<RidersScreen> createState() => _RidersScreenState();
 }
@@ -26,9 +27,11 @@ class _RidersScreenState extends State<RidersScreen> {
 
   RealtimeChannel? _riderSyncChannel;
   Map<String, double> _todayCashMap = {};
+  String? _resolvedStoreId;
 
   @override void initState() {
     super.initState();
+    _resolvedStoreId = widget.managerStoreId;
     _loadRidersData();
     _setupRealtime();
   }
@@ -53,7 +56,23 @@ class _RidersScreenState extends State<RidersScreen> {
     if (_riders.isEmpty) setState(() => _loading = true);
 
     try {
-      final data = await supabase.from(AppConstants.ridersTable).select().order('created_at', ascending: false);
+      // Self-heal store ID if missing from parent widget
+      if (!widget.isSuperAdmin && _resolvedStoreId == null) {
+        final user = supabase.auth.currentUser;
+        if (user != null) {
+          final memberRes = await supabase.from('team_members').select('store_id').eq('email', user.email!).maybeSingle();
+          if (memberRes != null) {
+            _resolvedStoreId = memberRes['store_id'];
+          }
+        }
+      }
+
+      var query = supabase.from(AppConstants.ridersTable).select('*, stores(name)');
+      if (!widget.isSuperAdmin && _resolvedStoreId != null) {
+        query = query.eq('store_id', _resolvedStoreId!);
+      }
+      final data = await query.order('created_at', ascending: false);
+
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
 
@@ -90,10 +109,18 @@ class _RidersScreenState extends State<RidersScreen> {
 
   List<Map<String, dynamic>> get _filtered {
     final q = _searchQuery.toLowerCase(); if (q.isEmpty) return _riders;
-    return _riders.where((r) => (r['full_name'] ?? '').toString().toLowerCase().contains(q) || (r['phone'] ?? '').toString().toLowerCase().contains(q) || (r['vehicle_plate'] ?? '').toString().toLowerCase().contains(q)).toList();
+    return _riders.where((r) => (r['full_name'] ?? '').toString().toLowerCase().contains(q) || (r['phone'] ?? '').toString().toLowerCase().contains(q) || (r['vehicle_plate'] ?? '').toString().toLowerCase().contains(q) || (r['stores']?['name'] ?? '').toString().toLowerCase().contains(q)).toList();
   }
 
-  void _showRiderForm([Map<String, dynamic>? rider]) => showDialog(context: context, builder: (_) => _RiderFormDialog(onSaved: _loadRidersData, rider: rider));
+  void _showRiderForm([Map<String, dynamic>? rider]) => showDialog(
+      context: context,
+      builder: (_) => _RiderFormDialog(
+        onSaved: _loadRidersData,
+        rider: rider,
+        isSuperAdmin: widget.isSuperAdmin,
+        managerStoreId: _resolvedStoreId,
+      )
+  );
 
   void _showCollectCashDialog(String riderId, String riderName, double todayCash, double totalCash) {
     showDialog(context: context, builder: (_) => _CollectCashDialog(riderId: riderId, riderName: riderName, todayCash: todayCash, totalCash: totalCash, onSuccess: _loadRidersData));
@@ -107,13 +134,13 @@ class _RidersScreenState extends State<RidersScreen> {
     showDialog(context: context, builder: (_) => _RiderCashHistoryDialog(riderId: riderId, riderName: riderName));
   }
 
-  // --- NEW: Calculate Payout Dialog ---
   void _showCalculatePayoutDialog(String riderId, String riderName) {
     showDialog(context: context, builder: (_) => _RiderPayoutDialog(riderId: riderId, riderName: riderName));
   }
 
   @override Widget build(BuildContext context) {
-    final online = _riders.where((r) => r['is_online'] == true).length; final active = _riders.where((r) => r['is_active'] == true).length;
+    final online = _riders.where((r) => r['is_online'] == true).length;
+    final active = _riders.where((r) => r['is_active'] == true).length;
 
     return Column(children: [
       Container(
@@ -121,10 +148,8 @@ class _RidersScreenState extends State<RidersScreen> {
         child: Row(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [Text('Riders & Fleet', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), Text('Manage logistics and track delivery agents', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext))]),
           const Spacer(),
-          if (widget.isSuperAdmin) ...[
-            _GradientButton(label: 'Add Rider', icon: Icons.add, onPressed: () => _showRiderForm()),
-            const SizedBox(width: 16),
-          ],
+          _GradientButton(label: 'Add Rider', icon: Icons.add, onPressed: () => _showRiderForm()),
+          const SizedBox(width: 16),
           Container(decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border.withOpacity(0.5))), child: IconButton(icon: Icon(Icons.refresh_rounded, color: AppColors.text, size: 20), onPressed: _loadRidersData)),
         ]),
       ),
@@ -139,7 +164,7 @@ class _RidersScreenState extends State<RidersScreen> {
               _RiderStat('Offline', (active - online).toString(), AppColors.subtext, Icons.wifi_off_rounded),
             ]),
             const SizedBox(height: 24),
-            TextField(onChanged: (v) => setState(() => _searchQuery = v), style: GoogleFonts.inter(fontSize: 14), decoration: InputDecoration(hintText: 'Search by name, phone, or vehicle plate...', hintStyle: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14), prefixIcon: Icon(Icons.search_rounded, color: AppColors.subtext, size: 20), filled: true, fillColor: AppColors.surface, contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)))),
+            TextField(onChanged: (v) => setState(() => _searchQuery = v), style: GoogleFonts.inter(fontSize: 14), decoration: InputDecoration(hintText: 'Search by name, phone, branch, or vehicle plate...', hintStyle: GoogleFonts.inter(color: AppColors.subtext, fontSize: 14), prefixIcon: Icon(Icons.search_rounded, color: AppColors.subtext, size: 20), filled: true, fillColor: AppColors.surface, contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppColors.border)), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.primary, width: 1.5)))),
             const SizedBox(height: 24),
             Expanded(child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -158,7 +183,7 @@ class _RidersScreenState extends State<RidersScreen> {
                 onCollectCash: () => _showCollectCashDialog(rId, rName, _todayCashMap[rId] ?? 0.0, (r['cash_in_hand'] as num?)?.toDouble() ?? 0.0),
                 onOrderHistory: () => _showOrderHistoryDialog(rId, rName),
                 onCashHistory: () => _showCashHistoryDialog(rId, rName),
-                onCalculatePayout: () => _showCalculatePayoutDialog(rId, rName), // NEW
+                onCalculatePayout: () => _showCalculatePayoutDialog(rId, rName),
               );
             })),
           ]),
@@ -185,7 +210,16 @@ class _RiderCard extends StatelessWidget {
   String _vehicleEmoji(String t) { switch (t) { case 'motorcycle': return '🏍️'; case 'bicycle': return '🚲'; case 'van': return '🚐'; default: return '🚗'; } }
 
   @override Widget build(BuildContext context) {
-    final isOnline = rider['is_online'] == true; final isActive = rider['is_active'] == true; final name = rider['full_name'] as String? ?? 'Rider'; final vehicle = rider['vehicle_type'] as String? ?? 'motorcycle'; final plate = rider['vehicle_plate'] as String? ?? 'No plate'; final phone = rider['phone'] as String? ?? '—'; final rating = (rider['rating'] as num?)?.toDouble() ?? 5.0; final trips = rider['total_trips'] as int? ?? 0; final avatar = rider['avatar_url'] as String?;
+    final isOnline = rider['is_online'] == true;
+    final isActive = rider['is_active'] == true;
+    final name = rider['full_name'] as String? ?? 'Rider';
+    final vehicle = rider['vehicle_type'] as String? ?? 'motorcycle';
+    final plate = rider['vehicle_plate'] as String? ?? 'No plate';
+    final phone = rider['phone'] as String? ?? '—';
+    final rating = (rider['rating'] as num?)?.toDouble() ?? 5.0;
+    final trips = rider['total_trips'] as int? ?? 0;
+    final avatar = rider['avatar_url'] as String?;
+    final storeName = rider['stores']?['name'] ?? 'Unassigned Branch';
     final totalCash = (rider['cash_in_hand'] as num?)?.toDouble() ?? 0.0;
 
     return Container(
@@ -200,15 +234,17 @@ class _RiderCard extends StatelessWidget {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
                 Text(name, style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 18, color: AppColors.text)), const SizedBox(width: 12),
-                if (isSuperAdmin) InkWell(onTap: onEdit, borderRadius: BorderRadius.circular(6), child: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.edit_rounded, color: AppColors.primary, size: 14)))
+                InkWell(onTap: onEdit, borderRadius: BorderRadius.circular(6), child: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.edit_rounded, color: AppColors.primary, size: 14)))
               ]),
-              const SizedBox(height: 6), Text('$phone  •  $plate', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500)), const SizedBox(height: 12),
+              const SizedBox(height: 6),
+              Text('$phone  •  $storeName  •  $plate', style: GoogleFonts.inter(fontSize: 13, color: AppColors.subtext, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 12),
               Row(children: [_chip('${_vehicleEmoji(vehicle)} ${vehicle.toUpperCase()}', AppColors.primary), const SizedBox(width: 8), _chip('⭐ ${rating.toStringAsFixed(1)}', AppColors.warning), const SizedBox(width: 8), _chip('$trips trips', AppColors.success)]),
             ])),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(isOnline ? 'ONLINE' : 'OFFLINE', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: isOnline ? AppColors.success : Colors.grey.shade600))),
               const SizedBox(height: 12),
-              Row(children: [Text(isActive ? 'Active' : 'Inactive', style: GoogleFonts.inter(fontSize: 12, color: isActive ? AppColors.text : AppColors.subtext, fontWeight: FontWeight.w600)), const SizedBox(width: 8), Transform.scale(scale: 0.8, child: Switch.adaptive(value: isActive, activeColor: AppColors.primary, inactiveTrackColor: Colors.grey.shade200, onChanged: isSuperAdmin ? (_) => onToggleActive(rider['id'] as String, isActive) : null))]),
+              Row(children: [Text(isActive ? 'Active' : 'Inactive', style: GoogleFonts.inter(fontSize: 12, color: isActive ? AppColors.text : AppColors.subtext, fontWeight: FontWeight.w600)), const SizedBox(width: 8), Transform.scale(scale: 0.8, child: Switch.adaptive(value: isActive, activeColor: AppColors.primary, inactiveTrackColor: Colors.grey.shade200, onChanged: (_) => onToggleActive(rider['id'] as String, isActive)))]),
             ]),
           ]),
           const SizedBox(height: 24),
@@ -244,7 +280,6 @@ class _RiderCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          // --- UPDATED ACTIONS ROW ---
           Wrap(
             spacing: 12,
             runSpacing: 12,
@@ -276,7 +311,7 @@ class _RiderCard extends StatelessWidget {
   Widget _chip(String label, Color color) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(label, style: GoogleFonts.inter(fontSize: 10, color: color, fontWeight: FontWeight.bold)));
 }
 
-// ─── NEW: PAYOUT CALCULATOR DIALOG ──────────────────────────────────────────
+// ─── PAYOUT CALCULATOR DIALOG ──────────────────────────────────────────
 class _RiderPayoutDialog extends StatefulWidget {
   final String riderId, riderName;
   const _RiderPayoutDialog({required this.riderId, required this.riderName});
@@ -309,7 +344,7 @@ class _RiderPayoutDialogState extends State<_RiderPayoutDialog> {
     } else if (_period == 'This Month') {
       start = DateTime(now.year, now.month, 1);
       end = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
-    } else { // Last Month
+    } else {
       start = DateTime(now.year, now.month - 1, 1);
       end = DateTime(now.year, now.month, 0, 23, 59, 59);
     }
@@ -670,19 +705,41 @@ class _CollectCashDialogState extends State<_CollectCashDialog> {
 }
 
 class _RiderFormDialog extends StatefulWidget {
-  final VoidCallback onSaved; final Map<String, dynamic>? rider; const _RiderFormDialog({required this.onSaved, this.rider});
+  final VoidCallback onSaved;
+  final Map<String, dynamic>? rider;
+  final bool isSuperAdmin;
+  final String? managerStoreId;
+
+  const _RiderFormDialog({required this.onSaved, this.rider, required this.isSuperAdmin, this.managerStoreId});
+
   @override State<_RiderFormDialog> createState() => _RiderFormDialogState();
 }
 
 class _RiderFormDialogState extends State<_RiderFormDialog> {
-  final _formKey = GlobalKey<FormState>(); final _nameCtrl = TextEditingController(); final _phoneCtrl = TextEditingController(); final _passwordCtrl = TextEditingController(); final _plateCtrl = TextEditingController();
-  bool _loading = false; String _selectedVehicle = 'motorcycle'; final List<String> _vehicleTypes = ['motorcycle', 'bicycle', 'car', 'van'];
-  Uint8List? _avatarBytes; String? _existingAvatarUrl;
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _plateCtrl = TextEditingController();
 
+  bool _loading = false;
+  String _selectedVehicle = 'motorcycle';
+  final List<String> _vehicleTypes = ['motorcycle', 'bicycle', 'car', 'van'];
+  Uint8List? _avatarBytes;
+  String? _existingAvatarUrl;
   bool _obscurePassword = true;
+
+  List<Map<String, dynamic>> _storesList = [];
+  String? _selectedStoreId;
 
   @override void initState() {
     super.initState();
+    if (!widget.isSuperAdmin) {
+      _selectedStoreId = widget.managerStoreId;
+    } else {
+      _loadStores();
+    }
+
     if (widget.rider != null) {
       _nameCtrl.text = widget.rider!['full_name'] ?? '';
       _phoneCtrl.text = widget.rider!['phone'] ?? '';
@@ -690,12 +747,28 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
       _plateCtrl.text = widget.rider!['vehicle_plate'] ?? '';
       _selectedVehicle = widget.rider!['vehicle_type'] ?? 'motorcycle';
       _existingAvatarUrl = widget.rider!['avatar_url'];
+      if (widget.isSuperAdmin) {
+        _selectedStoreId = widget.rider!['store_id'];
+      }
+    }
+  }
+
+  Future<void> _loadStores() async {
+    try {
+      final res = await supabase.from('stores').select('id, name').order('name');
+      if (mounted) setState(() => _storesList = List<Map<String, dynamic>>.from(res));
+    } catch (e) {
+      debugPrint('Error loading stores: $e');
     }
   }
 
   Future<void> _pickImage() async {
-    final ImagePicker picker = ImagePicker(); final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-    if (image != null) { final bytes = await image.readAsBytes(); setState(() => _avatarBytes = bytes); }
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setState(() => _avatarBytes = bytes);
+    }
   }
 
   String _generateUuid() {
@@ -707,12 +780,21 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (widget.isSuperAdmin && _selectedStoreId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a branch location for the rider'), backgroundColor: AppColors.error));
+      return;
+    }
+
     setState(() => _loading = true);
-    String plateValue = _plateCtrl.text.trim(); if (_selectedVehicle == 'bicycle' && plateValue.isEmpty) plateValue = 'N/A';
+    String plateValue = _plateCtrl.text.trim();
+    if (_selectedVehicle == 'bicycle' && plateValue.isEmpty) plateValue = 'N/A';
+
     try {
       String? finalAvatarUrl = _existingAvatarUrl;
       if (_avatarBytes != null) {
-        final adminId = supabase.auth.currentUser!.id; final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg'; final storagePath = '$adminId/$fileName';
+        final adminId = supabase.auth.currentUser!.id;
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final storagePath = '$adminId/$fileName';
         await supabase.storage.from('avatars').uploadBinary(storagePath, _avatarBytes!, fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
         finalAvatarUrl = supabase.storage.from('avatars').getPublicUrl(storagePath);
       }
@@ -723,17 +805,26 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
         'password': _passwordCtrl.text.trim(),
         'vehicle_type': _selectedVehicle,
         'vehicle_plate': plateValue,
-        'avatar_url': finalAvatarUrl
+        'avatar_url': finalAvatarUrl,
+        'store_id': widget.isSuperAdmin ? _selectedStoreId : widget.managerStoreId,
       };
 
       if (widget.rider == null) {
-        riderData['id'] = _generateUuid(); riderData['is_active'] = true; riderData['is_online'] = false; riderData['rating'] = 5.0; riderData['total_trips'] = 0; riderData['cash_in_hand'] = 0;
+        riderData['id'] = _generateUuid();
+        riderData['is_active'] = true;
+        riderData['is_online'] = false;
+        riderData['rating'] = 5.0;
+        riderData['total_trips'] = 0;
+        riderData['cash_in_hand'] = 0;
         await supabase.from(AppConstants.ridersTable).insert(riderData);
       } else {
         await supabase.from(AppConstants.ridersTable).update(riderData).eq('id', widget.rider!['id']);
       }
-      widget.onSaved(); if (mounted) Navigator.pop(context);
-    } catch (e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error)); }
+      widget.onSaved();
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.error));
+    }
     setState(() => _loading = false);
   }
 
@@ -741,14 +832,32 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
   Widget _label(String text) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(text, style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.text)));
 
   @override Widget build(BuildContext context) {
-    final isBicycle = _selectedVehicle == 'bicycle'; final isEditMode = widget.rider != null;
+    final isBicycle = _selectedVehicle == 'bicycle';
+    final isEditMode = widget.rider != null;
+
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), backgroundColor: AppColors.surface,
       child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 540), child: Padding(padding: const EdgeInsets.all(32), child: Form(key: _formKey, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
         Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(isEditMode ? Icons.edit_document : Icons.person_add_alt_1_rounded, color: AppColors.primary, size: 24)), const SizedBox(width: 16), Text(isEditMode ? 'Edit Rider' : 'Add New Rider', style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text)), const Spacer(), IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: AppColors.subtext))]),
         const SizedBox(height: 24), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 24),
+
         GestureDetector(onTap: _pickImage, child: Stack(children: [CircleAvatar(radius: 56, backgroundColor: AppColors.background, backgroundImage: _avatarBytes != null ? MemoryImage(_avatarBytes!) : (_existingAvatarUrl != null && _existingAvatarUrl!.isNotEmpty ? NetworkImage(_existingAvatarUrl!) as ImageProvider : null), child: (_avatarBytes == null && (_existingAvatarUrl == null || _existingAvatarUrl!.isEmpty)) ? Icon(Icons.add_a_photo_rounded, color: AppColors.subtext, size: 32) : null), Positioned(bottom: 0, right: 0, child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: AppColors.surface, width: 2.5)), child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 14)))])),
         const SizedBox(height: 32),
+
+        if (widget.isSuperAdmin) ...[
+          _label('Branch Location *'),
+          DropdownButtonFormField<String>(
+            value: _selectedStoreId,
+            hint: Text('Select branch location', style: GoogleFonts.inter(fontSize: 14, color: AppColors.subtext)),
+            icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
+            items: _storesList.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['name'], style: GoogleFonts.inter(fontSize: 14)))).toList(),
+            onChanged: (v) => setState(() => _selectedStoreId = v),
+            decoration: _deco('Select branch location'),
+            validator: (v) => v == null ? 'Please select a branch location' : null,
+          ),
+          const SizedBox(height: 20),
+        ],
+
         _label('Rider Full Name *'), TextFormField(controller: _nameCtrl, decoration: _deco('Enter rider name'), validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null), const SizedBox(height: 20),
 
         Row(children: [
@@ -772,13 +881,18 @@ class _RiderFormDialogState extends State<_RiderFormDialog> {
         ]),
         const SizedBox(height: 20),
 
-        Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Vehicle Type'), DropdownButtonFormField<String>(value: _selectedVehicle, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: _vehicleTypes.map((s) => DropdownMenuItem(value: s, child: Text(s.toUpperCase(), style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedVehicle = v!), decoration: _deco(''))])), const SizedBox(width: 16), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label(isBicycle ? 'Vehicle Plate (Optional)' : 'Vehicle Plate *'), TextFormField(controller: _plateCtrl, decoration: _deco(isBicycle ? 'Leave blank for N/A' : 'e.g. DHK-1234'), validator: (v) => (!isBicycle && (v?.trim().isEmpty ?? true)) ? 'Required' : null)]))]),
+        Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label('Vehicle Type'), DropdownButtonFormField<String>(value: _selectedVehicle, icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20), items: _vehicleTypes.map((s) => DropdownMenuItem(value: s, child: Text(s.toUpperCase(), style: GoogleFonts.inter(fontSize: 14)))).toList(), onChanged: (v) => setState(() => _selectedVehicle = v!), decoration: _deco(''))])),
+          const SizedBox(width: 16),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [_label(isBicycle ? 'Vehicle Plate (Optional)' : 'Vehicle Plate *'), TextFormField(controller: _plateCtrl, decoration: _deco(isBicycle ? 'Leave blank for N/A' : 'e.g. DHK-1234'), validator: (v) => (!isBicycle && (v?.trim().isEmpty ?? true)) ? 'Required' : null)]))
+        ]),
         const SizedBox(height: 32), Divider(height: 1, color: AppColors.border.withOpacity(0.5)), const SizedBox(height: 24),
         Row(children: [Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context), style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 18), side: BorderSide(color: AppColors.border), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: Text('Cancel', style: GoogleFonts.inter(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)))), const SizedBox(width: 16), Expanded(child: _GradientButton(label: _loading ? 'Saving…' : (isEditMode ? 'Update Rider' : 'Add Rider'), icon: Icons.check_rounded, onPressed: _loading ? null : _submit))]),
       ]))))),
     );
   }
 }
+
 class _GradientButton extends StatelessWidget {
   final String label; final IconData? icon; final VoidCallback? onPressed;
   const _GradientButton({required this.label, this.icon, required this.onPressed});

@@ -151,14 +151,94 @@ class OrderScreenState extends State<OrderScreen> {
     catch (e) { if (mounted) setState(() => _loading = false); }
   }
 
-  Future<void> _showRiderSelection(String orderId, String nextStatus) async {
-    final res = await supabase.from(AppConstants.ridersTable).select().eq('is_active', true);
-    final availableRiders = List<Map<String, dynamic>>.from(res);
+  // --- UPDATED: Branch-segregated & sorted rider assignment modal ---
+  Future<void> _showRiderSelection(Map<String, dynamic> order, String nextStatus) async {
+    final orderId = order['id'];
+    final orderStoreId = order['store_id']?.toString();
+
+    var query = supabase.from(AppConstants.ridersTable).select('*, stores(name)').eq('is_active', true);
+
+    // If manager is logged in, restrict riders to their branch only
+    if (!widget.isSuperAdmin && widget.managerStoreId != null) {
+      query = query.eq('store_id', widget.managerStoreId!);
+    }
+
+    final res = await query;
+    List<Map<String, dynamic>> availableRiders = List<Map<String, dynamic>>.from(res);
+
+    // If Super Admin is logged in, prioritize/sort riders belonging to this order's store branch to the top
+    if (widget.isSuperAdmin && orderStoreId != null) {
+      availableRiders.sort((a, b) {
+        bool aMatches = a['store_id']?.toString() == orderStoreId;
+        bool bMatches = b['store_id']?.toString() == orderStoreId;
+        if (aMatches && !bMatches) return -1;
+        if (!aMatches && bMatches) return 1;
+        return 0;
+      });
+    }
+
     if (!mounted) return;
-    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: _surfaceColor(context), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: _borderColor(context))), title: Text(nextStatus == 'assign_pickup' ? 'Dispatch for Pickup' : 'Dispatch for Delivery', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 20, color: _textColor(context))), content: SizedBox(width: 440, child: availableRiders.isEmpty ? Padding(padding: const EdgeInsets.all(24), child: Text("No active riders available.", style: GoogleFonts.inter(color: _subtextColor(context)))) : ListView.separated(shrinkWrap: true, itemCount: availableRiders.length, separatorBuilder: (_, __) => Divider(height: 1, color: _borderColor(context)), itemBuilder: (c, i) {
-      final r = availableRiders[i]; final isOnline = r['is_online'] == true; final avatar = r['avatar_url'] as String?;
-      return ListTile(contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8), leading: CircleAvatar(backgroundColor: AppColors.primary.withOpacity(0.1), backgroundImage: (avatar != null && avatar.isNotEmpty) ? NetworkImage(avatar) : null, child: (avatar == null || avatar.isEmpty) ? Text(r['full_name'][0].toUpperCase(), style: GoogleFonts.outfit(color: AppColors.primary, fontWeight: FontWeight.bold)) : null), title: Text(r['full_name'], style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: _textColor(context))), subtitle: Text('${r['vehicle_type']} • ${r['vehicle_plate']}', style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context))), trailing: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)), child: Text(isOnline ? 'Online' : 'Offline', style: GoogleFonts.inter(fontSize: 11, color: isOnline ? AppColors.success : Colors.grey.shade600, fontWeight: FontWeight.bold))), onTap: () { Navigator.pop(ctx); _assignRiderAndStatus(orderId, r['id'], nextStatus); });
-    })), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: GoogleFonts.inter(color: _subtextColor(context), fontWeight: FontWeight.w600)))]));
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            backgroundColor: _surfaceColor(context),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: _borderColor(context))),
+            title: Text(nextStatus == 'assign_pickup' ? 'Dispatch for Pickup' : 'Dispatch for Delivery', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 20, color: _textColor(context))),
+            content: SizedBox(
+                width: 440,
+                child: availableRiders.isEmpty
+                    ? Padding(padding: const EdgeInsets.all(24), child: Text("No active riders available for this branch.", style: GoogleFonts.inter(color: _subtextColor(context))))
+                    : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: availableRiders.length,
+                    separatorBuilder: (_, __) => Divider(height: 1, color: _borderColor(context)),
+                    itemBuilder: (c, i) {
+                      final r = availableRiders[i];
+                      final isOnline = r['is_online'] == true;
+                      final avatar = r['avatar_url'] as String?;
+                      final storeName = r['stores']?['name'] ?? 'Unassigned Branch';
+                      final isMatchingBranch = orderStoreId != null && r['store_id']?.toString() == orderStoreId;
+
+                      return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                          leading: CircleAvatar(
+                              backgroundColor: AppColors.primary.withOpacity(0.1),
+                              backgroundImage: (avatar != null && avatar.isNotEmpty) ? NetworkImage(avatar) : null,
+                              child: (avatar == null || avatar.isEmpty) ? Text(r['full_name'][0].toUpperCase(), style: GoogleFonts.outfit(color: AppColors.primary, fontWeight: FontWeight.bold)) : null
+                          ),
+                          title: Row(
+                            children: [
+                              Expanded(child: Text(r['full_name'], style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: _textColor(context)))),
+                              if (widget.isSuperAdmin && isMatchingBranch)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                  child: Text('MATCHING BRANCH', style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.primary)),
+                                )
+                            ],
+                          ),
+                          subtitle: Text('${r['vehicle_type'].toString().toUpperCase()} • $storeName', style: GoogleFonts.inter(fontSize: 13, color: _subtextColor(context))),
+                          trailing: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: (isOnline ? AppColors.success : Colors.grey.shade400).withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
+                              child: Text(isOnline ? 'Online' : 'Offline', style: GoogleFonts.inter(fontSize: 11, color: isOnline ? AppColors.success : Colors.grey.shade600, fontWeight: FontWeight.bold))
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _assignRiderAndStatus(orderId, r['id'], nextStatus);
+                          }
+                      );
+                    }
+                )
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text('Cancel', style: GoogleFonts.inter(color: _subtextColor(context), fontWeight: FontWeight.w600))
+              )
+            ]
+        )
+    );
   }
 
   Future<void> _handleActionClick(Map<String, dynamic> order) async {
@@ -173,7 +253,7 @@ class OrderScreenState extends State<OrderScreen> {
       if (logisticsMode == 'self_service' || logisticsMode == 'delivery_only') {
         _updateStatus(orderId, 'received');
       } else {
-        _showRiderSelection(orderId, 'assign_pickup');
+        _showRiderSelection(order, 'assign_pickup');
       }
     }
     else if (currentStatus == 'dropped') { _updateStatus(orderId, 'received'); }
@@ -183,7 +263,7 @@ class OrderScreenState extends State<OrderScreen> {
       if (logisticsMode == 'self_service') {
         _updateStatus(orderId, 'delivered');
       } else {
-        _showRiderSelection(orderId, 'out_for_delivery');
+        _showRiderSelection(order, 'out_for_delivery');
       }
     }
   }
