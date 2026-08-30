@@ -29,9 +29,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool _loading = true;
   String? _error;
 
-  List<Map<String, dynamic>> _rawOrders = [];
-  List<Map<String, dynamic>> _rawReviews = [];
+  // In-memory data for instant filtering
+  List<Map<String, dynamic>> _allOrders = [];
+  List<Map<String, dynamic>> _allReviews = [];
   List<Map<String, dynamic>> _filteredByService = [];
+
+  // Store Selector variables
+  List<Map<String, dynamic>> _storesList = [];
+  String? _selectedStoreFilter; // null means 'All Stores'
 
   int _selectedMonth = DateTime.now().month;
   int _selectedYear = DateTime.now().year;
@@ -50,43 +55,54 @@ class _ReportsScreenState extends State<ReportsScreen> {
     Colors.amber.shade500
   ];
 
-  @override void initState() { super.initState(); _loadReports(); }
+  @override void initState() {
+    super.initState();
+    if (widget.isSuperAdmin) _loadStores();
+    _loadReports();
+  }
+
+  Future<void> _loadStores() async {
+    try {
+      final data = await supabase.from('stores').select('id, name').order('created_at');
+      if (mounted) setState(() => _storesList = List<Map<String, dynamic>>.from(data));
+    } catch (e) {
+      debugPrint('Error loading stores: $e');
+    }
+  }
 
   Future<void> _loadReports() async {
     setState(() => _loading = true);
     try {
-      var query = supabase.from(AppConstants.ordersTable).select('status, total_price, created_at, service_id, services(title)');
+      // Fetch orders with store_id included
+      var query = supabase.from(AppConstants.ordersTable).select('id, store_id, status, total_price, created_at, service_id, services(title)');
       if (!widget.isSuperAdmin && widget.managerStoreId != null) {
         query = query.eq('store_id', widget.managerStoreId!);
       }
       final orders = await query;
-      _rawOrders = List<Map<String, dynamic>>.from(orders);
+      _allOrders = List<Map<String, dynamic>>.from(orders);
 
-      final reviewsData = await supabase.from('reviews').select('rating, service_id');
-      _rawReviews = List<Map<String, dynamic>>.from(reviewsData);
+      // Fetch reviews safely. Tries to get order_id to map store ratings accurately.
+      List<Map<String, dynamic>> reviewsData = [];
+      try {
+        final res = await supabase.from('reviews').select('rating, service_id, order_id');
+        reviewsData = List<Map<String, dynamic>>.from(res);
+      } catch (_) {
+        // Fallback if order_id is missing in DB schema
+        final res = await supabase.from('reviews').select('rating, service_id');
+        reviewsData = List<Map<String, dynamic>>.from(res);
+      }
+      _allReviews = reviewsData;
 
       int minYear = 2025;
-      final tempStats = <String, MonthlyStatData>{};
-
-      for (final o in _rawOrders) {
+      for (final o in _allOrders) {
         if (o['created_at'] == null) continue;
         final d = DateTime.parse(o['created_at']).toLocal();
         if (d.year < minYear) minYear = d.year;
-
-        final key = '${d.month}-${d.year}';
-        tempStats.putIfAbsent(key, () => MonthlyStatData());
-        tempStats[key]!.orders += 1;
-
-        if (o['status'] == 'delivered') {
-          tempStats[key]!.delivered += 1;
-          tempStats[key]!.revenue += ((o['total_price'] as num?)?.toDouble() ?? 0.0);
-        }
       }
 
       _availableYears = List.generate(DateTime.now().year - minYear + 1, (i) => minYear + i);
       if (!_availableYears.contains(_selectedYear)) _selectedYear = _availableYears.last;
 
-      _monthlyStats = tempStats;
       _calculateFilteredData();
 
       setState(() { _loading = false; });
@@ -97,17 +113,54 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   void _calculateFilteredData() {
-    if (_rawOrders.isEmpty) return;
+    if (_allOrders.isEmpty) {
+      setState(() {
+        _monthlyStats = {};
+        _filteredByService = [];
+      });
+      return;
+    }
 
-    final selectedMonthOrders = _rawOrders.where((o) {
+    // 1. Filter globally by Store Selection (For Super Admin)
+    List<Map<String, dynamic>> storeFilteredOrders = _allOrders;
+    List<Map<String, dynamic>> storeFilteredReviews = _allReviews;
+
+    if (widget.isSuperAdmin && _selectedStoreFilter != null) {
+      storeFilteredOrders = _allOrders.where((o) => o['store_id'] == _selectedStoreFilter).toList();
+
+      final storeOrderIds = storeFilteredOrders.map((o) => o['id']).toSet();
+      storeFilteredReviews = _allReviews.where((r) {
+        if (!r.containsKey('order_id') || r['order_id'] == null) return true; // Keep global if unlinkable
+        return storeOrderIds.contains(r['order_id']);
+      }).toList();
+    }
+
+    // 2. Aggregate KPI Stats for the filtered store(s) across ALL time
+    final tempStats = <String, MonthlyStatData>{};
+    for (final o in storeFilteredOrders) {
+      if (o['created_at'] == null) continue;
+      final d = DateTime.parse(o['created_at']).toLocal();
+      final key = '${d.month}-${d.year}';
+      tempStats.putIfAbsent(key, () => MonthlyStatData());
+      tempStats[key]!.orders += 1;
+      if (o['status'] == 'delivered') {
+        tempStats[key]!.delivered += 1;
+        tempStats[key]!.revenue += ((o['total_price'] as num?)?.toDouble() ?? 0.0);
+      }
+    }
+    _monthlyStats = tempStats;
+
+    // 3. Filter strictly by Month and Year for the list and charts
+    final selectedMonthOrders = storeFilteredOrders.where((o) {
       if (o['created_at'] == null) return false;
       final d = DateTime.parse(o['created_at']).toLocal();
       return d.month == _selectedMonth && d.year == _selectedYear;
     }).toList();
 
+    // 4. Calculate Review Averages
     final ratingSum = <String, double>{};
     final ratingCount = <String, int>{};
-    for (final r in _rawReviews) {
+    for (final r in storeFilteredReviews) {
       final sId = r['service_id'] as String?;
       if (sId == null) continue;
       final rating = (r['rating'] as num?)?.toDouble() ?? 0.0;
@@ -147,7 +200,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     });
   }
 
-  // --- REBUILT PDF: FIXED DISTORTION AND FITS A4 ---
+  // --- REBUILT PDF: DYNAMIC STORE LABEL INCLUDED ---
   Future<void> _exportMonthlyPDF() async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -158,7 +211,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
       );
 
-      final selectedMonthOrders = _rawOrders.where((o) {
+      // Apply the same memory filtering for the PDF
+      List<Map<String, dynamic>> storeFilteredOrders = _allOrders;
+      List<Map<String, dynamic>> storeFilteredReviews = _allReviews;
+
+      if (widget.isSuperAdmin && _selectedStoreFilter != null) {
+        storeFilteredOrders = _allOrders.where((o) => o['store_id'] == _selectedStoreFilter).toList();
+        final storeOrderIds = storeFilteredOrders.map((o) => o['id']).toSet();
+        storeFilteredReviews = _allReviews.where((r) {
+          if (!r.containsKey('order_id') || r['order_id'] == null) return true;
+          return storeOrderIds.contains(r['order_id']);
+        }).toList();
+      }
+
+      final selectedMonthOrders = storeFilteredOrders.where((o) {
         if (o['created_at'] == null) return false;
         final d = DateTime.parse(o['created_at']).toLocal();
         return d.month == _selectedMonth && d.year == _selectedYear;
@@ -199,7 +265,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final sId = e.key;
         final data = e.value;
 
-        final relevantReviews = _rawReviews.where((r) => r['service_id'] == sId).toList();
+        final relevantReviews = storeFilteredReviews.where((r) => r['service_id'] == sId).toList();
         double avgRating = 0.0;
         if (relevantReviews.isNotEmpty) {
           final sum = relevantReviews.fold(0.0, (prev, element) => prev + ((element['rating'] as num?)?.toDouble() ?? 0.0));
@@ -219,8 +285,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       final pdf = pw.Document();
 
+      // Setup dynamic store name string for the PDF title
+      String storeNameLabel = 'ALL STORES';
+      if (widget.isSuperAdmin && _selectedStoreFilter != null) {
+        storeNameLabel = _storesList.firstWhere(
+                (s) => s['id'] == _selectedStoreFilter,
+            orElse: () => {'name': 'STORE'}
+        )['name'].toString().toUpperCase();
+      } else if (!widget.isSuperAdmin) {
+        storeNameLabel = 'YOUR STORE';
+      }
+
       pdf.addPage(
-        pw.Page( // Changed to Page for stricter one-sheet control
+        pw.Page(
           pageFormat: PdfPageFormat.a4,
           margin: const pw.EdgeInsets.symmetric(horizontal: 30, vertical: 30),
           build: (pw.Context context) {
@@ -237,7 +314,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       children: [
                         pw.Text('EzeeWash Analytics', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#0F172A'))),
                         pw.SizedBox(height: 4),
-                        pw.Text('MONTHLY PERFORMANCE REPORT', style: pw.TextStyle(fontSize: 9, color: PdfColor.fromHex('#64748B'), letterSpacing: 1.1)),
+                        pw.Text('MONTHLY PERFORMANCE REPORT - $storeNameLabel', style: pw.TextStyle(fontSize: 9, color: PdfColor.fromHex('#64748B'), letterSpacing: 1.1)),
                       ],
                     ),
                     pw.Text('${_monthName(_selectedMonth)} $_selectedYear', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#3B82F6'))),
@@ -429,7 +506,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Container(
               decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
               child: IconButton(
-                  icon: const Icon(Icons.picture_as_pdf_rounded, color: AppColors.primary), tooltip: 'Export Monthly PDF', onPressed: _rawOrders.isEmpty ? null : _exportMonthlyPDF
+                  icon: const Icon(Icons.picture_as_pdf_rounded, color: AppColors.primary), tooltip: 'Export Monthly PDF', onPressed: _allOrders.isEmpty ? null : _exportMonthlyPDF
               )
           ),
           const SizedBox(width: 12),
@@ -451,6 +528,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 Text('Monthly Overview', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.text)),
                 Row(
                   children: [
+                    // Dynamic Store Selector only displays for Super Admin
+                    if (widget.isSuperAdmin) ...[
+                      _buildStoreDropdown(),
+                      const SizedBox(width: 12),
+                    ],
                     _buildDropdown(
                       value: _selectedMonth,
                       items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(_monthName(i + 1)))),
@@ -652,6 +734,31 @@ class _ReportsScreenState extends State<ReportsScreen> {
             const SizedBox(width: 16),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: GoogleFonts.inter(color: AppColors.subtext, fontSize: 13, fontWeight: FontWeight.w500)), const SizedBox(height: 6), Text(value, style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.text))])),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStoreDropdown() {
+    return Container(
+      height: 40, padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))]),
+      alignment: Alignment.center,
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          value: _selectedStoreFilter,
+          icon: const Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.storefront_rounded, size: 18, color: AppColors.primary)),
+          isDense: true, dropdownColor: AppColors.surface, style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text),
+          items: [
+            const DropdownMenuItem<String?>(value: null, child: Text('All Stores')),
+            ..._storesList.map((s) => DropdownMenuItem<String?>(value: s['id'] as String, child: Text(s['name'] as String))).toList(),
+          ],
+          onChanged: (val) {
+            setState(() {
+              _selectedStoreFilter = val;
+              _calculateFilteredData();
+            });
+          },
         ),
       ),
     );
